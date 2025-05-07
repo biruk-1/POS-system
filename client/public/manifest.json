@@ -1,0 +1,39 @@
+{
+  "short_name": "POS System",
+  "name": "Restaurant POS System",
+  "description": "A hybrid point-of-sale system with online/offline capabilities",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff",
+  "orientation": "portrait",
+  "scope": "/",
+  "categories": ["business", "restaurant", "food", "point-of-sale"],
+  "shortcuts": [
+    {
+      "name": "New Order",
+      "short_name": "Order",
+      "description": "Create a new food or drink order",
+      "url": "/cashier/order-entry"
+    },
+    {
+      "name": "Kitchen View",
+      "short_name": "Kitchen",
+      "description": "View food orders for kitchen staff",
+      "url": "/kitchen"
+    },
+    {
+      "name": "Bartender View",
+      "short_name": "Bar",
+      "description": "View drink orders for bartender staff",
+      "url": "/bartender"
+    }
+  ]
+} 

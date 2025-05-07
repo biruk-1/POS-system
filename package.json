@@ -1,0 +1,19 @@
+{
+  "name": "pos-system",
+  "version": "1.0.0",
+  "description": "Point of Sale System",
+  "main": "index.js",
+  "scripts": {
+    "start": "npm start --prefix server",
+    "server": "cd server && npm run dev",
+    "client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "install-all": "npm install && cd client && npm install && cd ../server && npm install"
+  },
+  "keywords": ["pos", "point-of-sale", "hybrid"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+} 
