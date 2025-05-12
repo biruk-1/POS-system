@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -33,19 +33,22 @@ import {
   Notifications as NotificationsIcon,
   Language as LanguageIcon
 } from '@mui/icons-material';
+import axios from 'axios';
 
 export default function Settings() {
   const theme = useTheme();
   const [currentTab, setCurrentTab] = useState(0);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   // Form state
   const [settings, setSettings] = useState({
     restaurantName: 'My Restaurant',
     taxRate: 8.5,
     serviceCharge: 10,
-    currency: 'USD',
+    currency: 'ETB',
     language: 'en',
     theme: 'light',
     autoLogout: 30,
@@ -57,6 +60,33 @@ export default function Settings() {
     apiKey: 'sk-1234-5678-9abc-defg',
     logoUrl: '/logo.png',
   });
+
+  // Fetch settings from API on component mount
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        setLoading(true);
+        const response = await axios.get('http://localhost:5001/api/settings', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        
+        // Merge API settings with default settings
+        if (response.data) {
+          setSettings(prevSettings => ({
+            ...prevSettings,
+            ...response.data
+          }));
+        }
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+        setError('Failed to load settings. Using defaults.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSettings();
+  }, []);
 
   const handleTabChange = (event, newValue) => {
     setCurrentTab(newValue);
@@ -70,11 +100,22 @@ export default function Settings() {
     });
   };
 
-  const handleSaveSettings = () => {
-    // In a real app, this would save to a backend
-    console.log('Saving settings:', settings);
-    setSnackbarMessage('Settings saved successfully!');
-    setSnackbarOpen(true);
+  const handleSaveSettings = async () => {
+    try {
+      setLoading(true);
+      await axios.put('http://localhost:5001/api/settings', settings, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      
+      setSnackbarMessage('Settings saved successfully!');
+      setSnackbarOpen(true);
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      setSnackbarMessage('Failed to save settings. Please try again.');
+      setSnackbarOpen(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCloseSnackbar = () => {
@@ -189,6 +230,7 @@ export default function Settings() {
                   onChange={handleSettingChange}
                   label="Currency"
                 >
+                  <MenuItem value="ETB">Ethiopian Birr (Br)</MenuItem>
                   <MenuItem value="USD">US Dollar ($)</MenuItem>
                   <MenuItem value="EUR">Euro (€)</MenuItem>
                   <MenuItem value="GBP">British Pound (£)</MenuItem>
@@ -305,34 +347,35 @@ export default function Settings() {
                   Receipt Preview
                 </Typography>
                 <Divider sx={{ mb: 2 }} />
-                <Box sx={{ 
-                  border: '1px dashed #ccc', 
-                  p: 2, 
-                  fontFamily: 'monospace',
-                  fontSize: '0.875rem',
-                  whiteSpace: 'pre-line'
-                }}>
-                  {`********************************
-${settings.restaurantName.toUpperCase()}
-********************************
+                <Box
+                  sx={{
+                    fontFamily: 'monospace',
+                    whiteSpace: 'pre',
+                    bgcolor: 'background.paper',
+                    p: 2,
+                    borderRadius: 1,
+                    border: '1px dashed',
+                    fontSize: '0.75rem',
+                    minWidth: 280,
+                  }}
+                >
+                  {`${settings.restaurantName}
+${new Date().toLocaleDateString()}
+--------------------------------
 
-Order #1234
-Date: ${new Date().toLocaleDateString()}
-
-ITEM           QTY   PRICE   TOTAL
+Burger         1     Br 8.99   Br 8.99
+Fries          1     Br 3.99   Br 3.99
+Soda           1     Br 2.49   Br 2.49
 --------------------------------
-Burger         1     $8.99   $8.99
-Fries          1     $3.99   $3.99
-Soda           1     $2.49   $2.49
+Subtotal:              Br 15.47
+Tax (${settings.taxRate}%):       Br 1.31
+Service (${settings.serviceCharge}%): Br 1.55
 --------------------------------
-Subtotal:              $15.47
-Tax (${settings.taxRate}%):       $1.31
-Service (${settings.serviceCharge}%): $1.55
---------------------------------
-TOTAL:                 $18.33
+TOTAL:                 Br 18.33
 
 ${settings.receiptFooter}
-********************************`}
+Thank you for your visit!
+`}
                 </Box>
               </Card>
             </Grid>

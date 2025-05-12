@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -23,7 +23,8 @@ import {
   TablePagination,
   IconButton,
   Tooltip,
-  useTheme
+  useTheme,
+  Alert
 } from '@mui/material';
 import { 
   Download as DownloadIcon,
@@ -36,6 +37,18 @@ import {
 } from '@mui/icons-material';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { LocalizationProvider, DatePicker } from '@mui/x-date-pickers';
+import axios from 'axios';
+import { formatCurrency } from '../../utils/currencyFormatter';
+import {
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
 
 // Mock data for report
 const mockSalesData = [
@@ -56,6 +69,28 @@ export default function Reports() {
   const [endDate, setEndDate] = useState(new Date());
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(5);
+  const [reportData, setReportData] = useState(mockSalesData);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  // Automatically generate report when reportType or date range changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (dateRange !== 'custom') {
+        generateReport();
+      }
+    }, 500); // Add a small delay to prevent too many API calls during date changes
+    
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportType, dateRange]); // Only re-run when report type or date range selection changes
+
+  // Load initial report on component mount
+  useEffect(() => {
+    generateReport();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleChangePage = (event, newPage) => {
     setPage(newPage);
@@ -112,11 +147,168 @@ export default function Reports() {
     }
   };
 
+  const generateReport = async () => {
+    setLoading(true);
+    setError('');
+    setSuccess('');
+    
+    try {
+      console.log('Generating report with parameters:', {
+        reportType,
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      });
+      
+      const response = await axios.post('http://localhost:5001/api/reports/generate', {
+        reportType,
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      }, {
+        headers: { 
+          Authorization: `Bearer ${localStorage.getItem('token')}` 
+        }
+      });
+      
+      setReportData(response.data);
+      setSuccess('Report generated successfully!');
+    } catch (err) {
+      console.error('Failed to generate report:', err);
+      
+      // More descriptive error message based on error type
+      if (err.response) {
+        // The server responded with an error status code
+        setError(`Server error: ${err.response.data?.error || err.response.statusText || 'Unknown error'}`);
+      } else if (err.request) {
+        // The request was made but no response was received
+        setError('Failed to connect to the server. Please check your connection.');
+      } else {
+        // Something happened in setting up the request
+        setError(`Failed to generate report: ${err.message}`);
+      }
+      
+      // Fallback to mock data if API fails
+      setReportData(mockSalesData);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Helper functions for calculating report summary values
+  const calculateTotalRevenue = () => {
+    if (reportData.length === 0) return 0;
+    return reportData.reduce((total, row) => total + (Number(row.revenue) || 0), 0);
+  };
+
+  const calculateTotalOrders = () => {
+    if (reportData.length === 0) return 0;
+    
+    if (reportType === 'sales') {
+      return reportData.reduce((total, row) => total + (Number(row.orders) || 0), 0);
+    } else if (reportType === 'items' || reportType === 'drinks') {
+      return reportData.reduce((total, row) => total + (Number(row.count) || 0), 0);
+    } else if (reportType === 'staff') {
+      return reportData.reduce((total, row) => total + (Number(row.orders) || 0), 0);
+    }
+    
+    return 0;
+  };
+
+  const calculateAverageOrderValue = () => {
+    const totalOrders = calculateTotalOrders();
+    const totalRevenue = calculateTotalRevenue();
+    
+    if (totalOrders === 0) return 0;
+    return totalRevenue / totalOrders;
+  };
+
+  const findTopSellingItem = () => {
+    if (reportData.length === 0 || reportType !== 'sales') return 'N/A';
+    
+    // Find the most frequent topItem
+    const topItems = reportData
+      .filter(row => row.topItem)
+      .map(row => row.topItem);
+      
+    if (topItems.length === 0) return 'N/A';
+    
+    const itemCounts = {};
+    topItems.forEach(item => {
+      itemCounts[item] = (itemCounts[item] || 0) + 1;
+    });
+    
+    const topItem = Object.keys(itemCounts).reduce((a, b) => 
+      itemCounts[a] > itemCounts[b] ? a : b
+    );
+    
+    return topItem || 'N/A';
+  };
+
+  const getReportTitle = () => {
+    switch(reportType) {
+      case 'sales':
+        return 'Sales Data';
+      case 'items':
+        return 'Food Items Report';
+      case 'drinks':
+        return 'Drinks Report';
+      case 'staff':
+        return 'Staff Performance';
+      default:
+        return 'Report Data';
+    }
+  };
+
+  function createSalesChart() {
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <LineChart
+          data={reportData}
+          margin={{ top: 10, right: 30, left: 0, bottom: 10 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="date" />
+          <YAxis 
+            tickFormatter={(value) => `Br ${value}`} 
+          />
+          <RechartsTooltip 
+            formatter={(value) => [`${formatCurrency(value)}`, 'Revenue']} 
+            labelFormatter={(label) => `Date: ${label}`}
+          />
+          <Legend />
+          <Line
+            type="monotone"
+            dataKey="revenue"
+            name="Revenue"
+            stroke={theme.palette.primary.main}
+            activeDot={{ r: 8 }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    );
+  }
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom sx={{ fontWeight: 'bold', mb: 3, color: theme.palette.roles.admin }}>
         Reports
       </Typography>
+      
+      {/* Error and Success Alerts */}
+      {error && (
+        <Box sx={{ mb: 2 }}>
+          <Alert severity="error" onClose={() => setError('')}>
+            {error}
+          </Alert>
+        </Box>
+      )}
+      
+      {success && (
+        <Box sx={{ mb: 2 }}>
+          <Alert severity="success" onClose={() => setSuccess('')}>
+            {success}
+          </Alert>
+        </Box>
+      )}
       
       <Grid container spacing={3}>
         {/* Report Controls */}
@@ -190,8 +382,10 @@ export default function Reports() {
                       color="primary" 
                       startIcon={getReportIcon()}
                       sx={{ mr: 1 }}
+                      onClick={generateReport}
+                      disabled={loading}
                     >
-                      Generate Report
+                      {loading ? 'Generating...' : 'Generate Report'}
                     </Button>
                     <Tooltip title="Export as CSV">
                       <IconButton color="primary">
@@ -216,7 +410,7 @@ export default function Reports() {
             <CardContent sx={{ textAlign: 'center' }}>
               <AttachMoneyIcon sx={{ fontSize: 48, color: theme.palette.roles.admin, mb: 1 }} />
               <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold' }}>
-                $12,345.67
+                {formatCurrency(calculateTotalRevenue())}
               </Typography>
               <Typography variant="body2" color="textSecondary">
                 Total Revenue
@@ -230,7 +424,7 @@ export default function Reports() {
             <CardContent sx={{ textAlign: 'center' }}>
               <BarChartIcon sx={{ fontSize: 48, color: theme.palette.info.main, mb: 1 }} />
               <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold' }}>
-                312
+                {calculateTotalOrders()}
               </Typography>
               <Typography variant="body2" color="textSecondary">
                 Total Orders
@@ -244,7 +438,7 @@ export default function Reports() {
             <CardContent sx={{ textAlign: 'center' }}>
               <TrendingUpIcon sx={{ fontSize: 48, color: theme.palette.success.main, mb: 1 }} />
               <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold' }}>
-                $39.57
+                ${calculateAverageOrderValue().toFixed(2)}
               </Typography>
               <Typography variant="body2" color="textSecondary">
                 Average Order Value
@@ -258,7 +452,7 @@ export default function Reports() {
             <CardContent sx={{ textAlign: 'center' }}>
               <FastfoodIcon sx={{ fontSize: 48, color: theme.palette.warning.main, mb: 1 }} />
               <Typography variant="h5" gutterBottom sx={{ fontWeight: 'bold' }}>
-                Steak Platter
+                {findTopSellingItem()}
               </Typography>
               <Typography variant="body2" color="textSecondary">
                 Top Selling Item
@@ -271,46 +465,111 @@ export default function Reports() {
         <Grid item xs={12}>
           <Card>
             <CardHeader 
-              title="Sales Data" 
+              title={getReportTitle()}
               subheader={`${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`} 
             />
             <Divider />
             <CardContent>
-              <TableContainer component={Paper} elevation={0}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Date</TableCell>
-                      <TableCell align="right">Orders</TableCell>
-                      <TableCell align="right">Revenue</TableCell>
-                      <TableCell align="right">Avg. Order Value</TableCell>
-                      <TableCell>Top Selling Item</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {mockSalesData
-                      .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                      .map((row) => (
-                        <TableRow key={row.id}>
-                          <TableCell>{row.date}</TableCell>
-                          <TableCell align="right">{row.orders}</TableCell>
-                          <TableCell align="right">${row.revenue.toFixed(2)}</TableCell>
-                          <TableCell align="right">${row.avgOrder.toFixed(2)}</TableCell>
-                          <TableCell>{row.topItem}</TableCell>
+              {reportData.length === 0 ? (
+                <Box sx={{ p: 3, textAlign: 'center' }}>
+                  <Typography color="text.secondary">
+                    No data found for the selected time period
+                  </Typography>
+                </Box>
+              ) : (
+                <>
+                  <TableContainer component={Paper} elevation={0}>
+                    <Table>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Date</TableCell>
+                          {reportType === 'sales' && (
+                            <>
+                              <TableCell align="right">Orders</TableCell>
+                              <TableCell align="right">Revenue</TableCell>
+                              <TableCell align="right">Avg. Order Value</TableCell>
+                              <TableCell>Top Selling Item</TableCell>
+                            </>
+                          )}
+                          {reportType === 'items' && (
+                            <>
+                              <TableCell align="right">Count</TableCell>
+                              <TableCell align="right">Revenue</TableCell>
+                            </>
+                          )}
+                          {reportType === 'drinks' && (
+                            <>
+                              <TableCell align="right">Count</TableCell>
+                              <TableCell align="right">Revenue</TableCell>
+                            </>
+                          )}
+                          {reportType === 'staff' && (
+                            <>
+                              <TableCell>Staff</TableCell>
+                              <TableCell>Role</TableCell>
+                              <TableCell align="right">Orders</TableCell>
+                              <TableCell align="right">Revenue</TableCell>
+                            </>
+                          )}
                         </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-              <TablePagination
-                rowsPerPageOptions={[5, 10, 25]}
-                component="div"
-                count={mockSalesData.length}
-                rowsPerPage={rowsPerPage}
-                page={page}
-                onPageChange={handleChangePage}
-                onRowsPerPageChange={handleChangeRowsPerPage}
-              />
+                      </TableHead>
+                      <TableBody>
+                        {reportData
+                          .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                          .map((row) => (
+                            <TableRow key={row.id}>
+                              {reportType === 'staff' ? (
+                                <TableCell>{row.staff}</TableCell>
+                              ) : (
+                                <TableCell>{row.date}</TableCell>
+                              )}
+                              
+                              {reportType === 'sales' && (
+                                <>
+                                  <TableCell align="right">{row.orders || 0}</TableCell>
+                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                                  <TableCell align="right">${(row.avgOrder || 0).toFixed(2)}</TableCell>
+                                  <TableCell>{row.topItem || 'N/A'}</TableCell>
+                                </>
+                              )}
+                              
+                              {reportType === 'items' && (
+                                <>
+                                  <TableCell align="right">{row.count || 0}</TableCell>
+                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                                </>
+                              )}
+                              
+                              {reportType === 'drinks' && (
+                                <>
+                                  <TableCell align="right">{row.count || 0}</TableCell>
+                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                                </>
+                              )}
+                              
+                              {reportType === 'staff' && (
+                                <>
+                                  <TableCell>{row.role || 'N/A'}</TableCell>
+                                  <TableCell align="right">{row.orders || 0}</TableCell>
+                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                                </>
+                              )}
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  <TablePagination
+                    rowsPerPageOptions={[5, 10, 25]}
+                    component="div"
+                    count={reportData.length}
+                    rowsPerPage={rowsPerPage}
+                    page={page}
+                    onPageChange={handleChangePage}
+                    onRowsPerPageChange={handleChangeRowsPerPage}
+                  />
+                </>
+              )}
             </CardContent>
           </Card>
         </Grid>

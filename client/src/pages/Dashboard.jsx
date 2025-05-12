@@ -6,6 +6,8 @@ import {
   Box,
   Card,
   CardContent,
+  IconButton,
+  useTheme,
 } from '@mui/material';
 import {
   BarChart,
@@ -18,6 +20,9 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import axios from 'axios';
+import { Refresh as RefreshIcon } from '@mui/icons-material';
+import StatCard from '../components/StatCard';
+import { formatCurrency } from '../utils/currencyFormatter';
 
 function Dashboard() {
   const [stats, setStats] = useState({
@@ -82,7 +87,7 @@ function Dashboard() {
         <Grid item xs={12} md={4}>
           <StatCard
             title="Total Sales"
-            value={`$${stats.totalSales.toFixed(2)}`}
+            value={formatCurrency(stats.totalSales)}
             color="primary.main"
           />
         </Grid>

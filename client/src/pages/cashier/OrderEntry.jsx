@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
+import io from 'socket.io-client';
 import {
   Typography,
   Grid,
@@ -32,6 +33,7 @@ import {
   Delete as DeleteIcon,
   Print as PrintIcon
 } from '@mui/icons-material';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 export default function OrderEntry() {
   const user = useSelector((state) => state.auth.user);
@@ -52,7 +54,7 @@ export default function OrderEntry() {
     const fetchItems = async () => {
       try {
         setLoading(true);
-        const response = await axios.get('http://localhost:5000/api/items', {
+        const response = await axios.get('http://localhost:5001/api/items', {
           headers: {
             Authorization: `Bearer ${token}`
           }
@@ -70,7 +72,7 @@ export default function OrderEntry() {
     const fetchWaiters = async () => {
       if (user?.role === 'cashier') {
         try {
-          const response = await axios.get('http://localhost:5000/api/users', {
+          const response = await axios.get('http://localhost:5001/api/users', {
             headers: {
               Authorization: `Bearer ${token}`
             }
@@ -87,6 +89,34 @@ export default function OrderEntry() {
     
     fetchItems();
     fetchWaiters();
+    
+    // Socket.IO for real-time menu updates
+    const socket = io('http://localhost:5001');
+    
+    socket.on('connect', () => {
+      console.log('Cashier connected to socket server');
+    });
+    
+    socket.on('item_created', (newItem) => {
+      console.log('New menu item received:', newItem);
+      setItems(prevItems => [...prevItems, newItem]);
+    });
+    
+    socket.on('item_updated', (updatedItem) => {
+      console.log('Menu item updated:', updatedItem);
+      setItems(prevItems => 
+        prevItems.map(item => item.id === updatedItem.id ? updatedItem : item)
+      );
+    });
+    
+    socket.on('item_deleted', (deletedItem) => {
+      console.log('Menu item deleted:', deletedItem);
+      setItems(prevItems => prevItems.filter(item => item.id !== deletedItem.id));
+    });
+    
+    return () => {
+      socket.disconnect();
+    };
   }, [token, user]);
   
   const handleTabChange = (event, newValue) => {
@@ -158,7 +188,7 @@ export default function OrderEntry() {
         waiter_id: user.role === 'waiter' ? null : waiterId
       };
       
-      const response = await axios.post('http://localhost:5000/api/orders', orderData, {
+      const response = await axios.post('http://localhost:5001/api/orders', orderData, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -252,7 +282,7 @@ export default function OrderEntry() {
                         </Typography>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <Typography variant="h6" color="primary">
-                            ${parseFloat(item.price).toFixed(2)}
+                            {formatCurrency(item.price)}
                           </Typography>
                           <Button
                             variant="contained"
@@ -357,7 +387,7 @@ export default function OrderEntry() {
                         }
                       >
                         <ListItemText
-                          primary={`${item.name} - $${parseFloat(item.price).toFixed(2)}`}
+                          primary={`${item.name} - ${formatCurrency(item.price)}`}
                           secondary={`${item.item_type.toUpperCase()}`}
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', ml: 2 }}>
@@ -385,7 +415,7 @@ export default function OrderEntry() {
                 
                 <Box sx={{ mt: 2, mb: 2, textAlign: 'right' }}>
                   <Typography variant="h5">
-                    Total: ${calculateTotal()}
+                    Total: {formatCurrency(calculateTotal())}
                   </Typography>
                 </Box>
                 

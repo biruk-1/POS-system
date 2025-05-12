@@ -36,6 +36,7 @@ import {
   Timer as TimerIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 // Mock data for demonstration
 const generateMockData = () => {
@@ -335,7 +336,7 @@ export default function WaiterDashboard() {
                 Total Sales
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                ${data.stats.totalSales}
+                {formatCurrency(data.stats.totalSales)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 Today's sales amount
@@ -390,7 +391,7 @@ export default function WaiterDashboard() {
                   </Grid>
                   <Grid item xs={12}>
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Amount</Typography>
-                    <Typography variant="body1" fontWeight="medium">${table.totalAmount}</Typography>
+                    <Typography variant="body1" fontWeight="medium">{formatCurrency(table.totalAmount)}</Typography>
                   </Grid>
                 </Grid>
                 <Button

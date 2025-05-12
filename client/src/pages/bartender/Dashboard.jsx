@@ -7,24 +7,16 @@ import {
   Grid,
   Card,
   CardContent,
+  CardMedia,
   CardHeader,
   Divider,
   Chip,
   Button,
-  IconButton,
-  Tab,
-  Tabs,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Paper,
   CircularProgress,
   Badge,
-  Stack,
-  useTheme
+  useTheme,
+  Container
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -33,9 +25,28 @@ import {
   Timer as TimerIcon,
   Alarm as AlarmIcon,
   LocalDrink as DrinkIcon,
-  NotificationsActive as NotificationIcon,
-  MoreVert as MoreVertIcon
+  Info as InfoIcon
 } from '@mui/icons-material';
+
+// Mock drink images for demonstration - these would be replaced with real image paths from database
+const DRINK_IMAGES = {
+  "Margarita": "https://source.unsplash.com/random/300x200/?margarita",
+  "Mojito": "https://source.unsplash.com/random/300x200/?mojito",
+  "Old Fashioned": "https://source.unsplash.com/random/300x200/?whiskey",
+  "Martini": "https://source.unsplash.com/random/300x200/?martini",
+  "Piña Colada": "https://source.unsplash.com/random/300x200/?pinacolada",
+  "Cosmopolitan": "https://source.unsplash.com/random/300x200/?cocktail",
+  "Whiskey Sour": "https://source.unsplash.com/random/300x200/?whiskey",
+  "Daiquiri": "https://source.unsplash.com/random/300x200/?daiquiri",
+  "Moscow Mule": "https://source.unsplash.com/random/300x200/?moscowmule",
+  "Bloody Mary": "https://source.unsplash.com/random/300x200/?bloodymary",
+  "Wine (Red)": "https://source.unsplash.com/random/300x200/?redwine",
+  "Beer (Draft)": "https://source.unsplash.com/random/300x200/?beer",
+  "Espresso Martini": "https://source.unsplash.com/random/300x200/?espresso",
+  "Long Island Iced Tea": "https://source.unsplash.com/random/300x200/?icedtea",
+  // Default fallback image
+  "default": "https://source.unsplash.com/random/300x200/?cocktail"
+};
 
 // Mock data for demonstration
 const generateMockOrders = () => {
@@ -55,12 +66,17 @@ const generateMockOrders = () => {
     priority: Math.random() > 0.7,
     items: Array.from(
       { length: Math.floor(Math.random() * 3) + 1 }, 
-      () => ({
-        name: drinkItems[Math.floor(Math.random() * drinkItems.length)],
-        quantity: Math.floor(Math.random() * 4) + 1,
-        notes: Math.random() > 0.7 ? 'No ice' : '',
-        ready: Math.random() > 0.6
-      })
+      () => {
+        const name = drinkItems[Math.floor(Math.random() * drinkItems.length)];
+        return {
+          name: name,
+          quantity: Math.floor(Math.random() * 4) + 1,
+          notes: Math.random() > 0.7 ? 'No ice' : '',
+          ready: Math.random() > 0.6,
+          // Add image property
+          image: DRINK_IMAGES[name] || DRINK_IMAGES.default
+        };
+      }
     )
   }));
 };
@@ -109,8 +125,8 @@ export default function BartenderDashboard() {
     }, 1000);
   };
   
-  const handleTabChange = (event, newValue) => {
-    setActiveTab(newValue);
+  const handleTabChange = (tabValue) => {
+    setActiveTab(tabValue);
   };
   
   const handleItemStatusChange = (orderId, itemName) => {
@@ -173,141 +189,191 @@ export default function BartenderDashboard() {
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
-        <CircularProgress />
+        <CircularProgress size={60} thickness={4} />
       </Box>
     );
   }
   
   return (
-    <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" fontWeight="bold" color={theme.palette.roles.bartender}>
-          Bartender Dashboard
-        </Typography>
+    <Container maxWidth="xl" sx={{ py: 2 }}>
+      {/* Status Filter Bar - Larger, more prominent buttons */}
+      <Paper
+        elevation={3}
+        sx={{
+          mb: 4,
+          p: 1,
+          borderRadius: 2,
+          background: 'white',
+        }}
+      >
+        <Grid container spacing={2} sx={{ px: 1 }}>
+          <Grid item xs={3}>
+            <Button
+              fullWidth
+              size="large"
+              onClick={() => handleTabChange(0)}
+              variant={activeTab === 0 ? "contained" : "outlined"}
+              sx={{
+                borderRadius: 2,
+                py: 2,
+                height: '100%',
+                bgcolor: activeTab === 0 ? theme.palette.primary.main : 'transparent',
+                borderColor: theme.palette.primary.main,
+                borderWidth: 2,
+                '&:hover': {
+                  bgcolor: activeTab === 0 ? theme.palette.primary.dark : theme.palette.primary.light + '20',
+                  borderColor: theme.palette.primary.main,
+                  borderWidth: 2,
+                }
+              }}
+            >
+              <Box sx={{ textAlign: 'center' }}>
+                <Badge
+                  badgeContent={stats.total}
+                  color="primary"
+                  max={99}
+                  sx={{ '& .MuiBadge-badge': { fontSize: 14, height: 22, minWidth: 22 } }}
+                >
+                  <BarIcon sx={{ fontSize: 36, mb: 1, color: activeTab === 0 ? 'white' : theme.palette.primary.main }} />
+                </Badge>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: activeTab === 0 ? 'white' : theme.palette.primary.main }}>
+                  All Orders
+                </Typography>
+              </Box>
+            </Button>
+          </Grid>
+
+          <Grid item xs={3}>
+            <Button
+              fullWidth
+              size="large"
+              onClick={() => handleTabChange(1)}
+              variant={activeTab === 1 ? "contained" : "outlined"}
+              sx={{
+                borderRadius: 2,
+                py: 2,
+                height: '100%',
+                bgcolor: activeTab === 1 ? theme.palette.error.main : 'transparent',
+                borderColor: theme.palette.error.main,
+                borderWidth: 2,
+                '&:hover': {
+                  bgcolor: activeTab === 1 ? theme.palette.error.dark : theme.palette.error.light + '20',
+                  borderColor: theme.palette.error.main,
+                  borderWidth: 2,
+                }
+              }}
+            >
+              <Box sx={{ textAlign: 'center' }}>
+                <Badge
+                  badgeContent={stats.new}
+                  color="error"
+                  max={99}
+                  sx={{ '& .MuiBadge-badge': { fontSize: 14, height: 22, minWidth: 22 } }}
+                >
+                  <AlarmIcon sx={{ fontSize: 36, mb: 1, color: activeTab === 1 ? 'white' : theme.palette.error.main }} />
+                </Badge>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: activeTab === 1 ? 'white' : theme.palette.error.main }}>
+                  New Orders
+                </Typography>
+              </Box>
+            </Button>
+          </Grid>
+
+          <Grid item xs={3}>
+            <Button
+              fullWidth
+              size="large"
+              onClick={() => handleTabChange(2)}
+              variant={activeTab === 2 ? "contained" : "outlined"}
+              sx={{
+                borderRadius: 2,
+                py: 2,
+                height: '100%',
+                bgcolor: activeTab === 2 ? theme.palette.warning.main : 'transparent',
+                borderColor: theme.palette.warning.main,
+                borderWidth: 2,
+                '&:hover': {
+                  bgcolor: activeTab === 2 ? theme.palette.warning.dark : theme.palette.warning.light + '20',
+                  borderColor: theme.palette.warning.main,
+                  borderWidth: 2,
+                }
+              }}
+            >
+              <Box sx={{ textAlign: 'center' }}>
+                <Badge
+                  badgeContent={stats.inProgress}
+                  color="warning"
+                  max={99}
+                  sx={{ '& .MuiBadge-badge': { fontSize: 14, height: 22, minWidth: 22 } }}
+                >
+                  <TimerIcon sx={{ fontSize: 36, mb: 1, color: activeTab === 2 ? 'white' : theme.palette.warning.main }} />
+                </Badge>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: activeTab === 2 ? 'white' : theme.palette.warning.main }}>
+                  In Progress
+                </Typography>
+              </Box>
+            </Button>
+          </Grid>
+
+          <Grid item xs={3}>
+            <Button
+              fullWidth
+              size="large"
+              onClick={() => handleTabChange(3)}
+              variant={activeTab === 3 ? "contained" : "outlined"}
+              sx={{
+                borderRadius: 2,
+                py: 2,
+                height: '100%',
+                bgcolor: activeTab === 3 ? theme.palette.success.main : 'transparent',
+                borderColor: theme.palette.success.main,
+                borderWidth: 2,
+                '&:hover': {
+                  bgcolor: activeTab === 3 ? theme.palette.success.dark : theme.palette.success.light + '20',
+                  borderColor: theme.palette.success.main,
+                  borderWidth: 2,
+                }
+              }}
+            >
+              <Box sx={{ textAlign: 'center' }}>
+                <Badge
+                  badgeContent={stats.ready}
+                  color="success"
+                  max={99}
+                  sx={{ '& .MuiBadge-badge': { fontSize: 14, height: 22, minWidth: 22 } }}
+                >
+                  <CheckCircleIcon sx={{ fontSize: 36, mb: 1, color: activeTab === 3 ? 'white' : theme.palette.success.main }} />
+                </Badge>
+                <Typography variant="h6" sx={{ fontWeight: 'bold', color: activeTab === 3 ? 'white' : theme.palette.success.main }}>
+                  Ready
+                </Typography>
+              </Box>
+            </Button>
+          </Grid>
+        </Grid>
+      </Paper>
+
+      {/* Refresh Button */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 3 }}>
         <Button
           startIcon={<RefreshIcon />}
-          variant="outlined"
+          variant="contained"
           color="primary"
           onClick={handleRefresh}
           disabled={refreshing}
+          size="large"
+          sx={{ borderRadius: 2, px: 3 }}
         >
           {refreshing ? 'Refreshing...' : 'Refresh Orders'}
         </Button>
       </Box>
       
-      {/* Stats Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={6} md={2.4}>
-          <Card sx={{ bgcolor: theme.palette.roles.bartender + '10' }}>
-            <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <BarIcon sx={{ fontSize: 32, color: theme.palette.roles.bartender, mb: 1 }} />
-              <Typography variant="h4" fontWeight="bold">
-                {stats.total}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Total Orders
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        
-        <Grid item xs={6} md={2.4}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <Badge badgeContent={stats.new} color="error" sx={{ '& .MuiBadge-badge': { fontSize: 12, height: 18, minWidth: 18 } }}>
-                <AlarmIcon sx={{ fontSize: 32, color: theme.palette.error.main, mb: 1 }} />
-              </Badge>
-              <Typography variant="h4" fontWeight="bold">
-                {stats.new}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                New Orders
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        
-        <Grid item xs={6} md={2.4}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <TimerIcon sx={{ fontSize: 32, color: theme.palette.warning.main, mb: 1 }} />
-              <Typography variant="h4" fontWeight="bold">
-                {stats.inProgress}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                In Progress
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        
-        <Grid item xs={6} md={2.4}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <CheckCircleIcon sx={{ fontSize: 32, color: theme.palette.success.main, mb: 1 }} />
-              <Typography variant="h4" fontWeight="bold">
-                {stats.ready}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Ready to Serve
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-        
-        <Grid item xs={6} md={2.4}>
-          <Card>
-            <CardContent sx={{ textAlign: 'center', py: 2 }}>
-              <NotificationIcon sx={{ fontSize: 32, color: theme.palette.secondary.main, mb: 1 }} />
-              <Typography variant="h4" fontWeight="bold">
-                {stats.priority}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Priority
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-      
-      {/* Order Tabs */}
-      <Paper sx={{ mb: 3 }}>
-        <Tabs
-          value={activeTab}
-          onChange={handleTabChange}
-          indicatorColor="primary"
-          textColor="primary"
-          variant="fullWidth"
-        >
-          <Tab 
-            label="All Active" 
-            icon={<Badge badgeContent={stats.total} color="primary" sx={{ '& .MuiBadge-badge': { fontSize: 10, height: 16, minWidth: 16 } }} />} 
-            iconPosition="end"
-          />
-          <Tab 
-            label="New" 
-            icon={<Badge badgeContent={stats.new} color="error" sx={{ '& .MuiBadge-badge': { fontSize: 10, height: 16, minWidth: 16 } }} />} 
-            iconPosition="end"
-          />
-          <Tab 
-            label="In Progress" 
-            icon={<Badge badgeContent={stats.inProgress} color="warning" sx={{ '& .MuiBadge-badge': { fontSize: 10, height: 16, minWidth: 16 } }} />} 
-            iconPosition="end"
-          />
-          <Tab 
-            label="Ready" 
-            icon={<Badge badgeContent={stats.ready} color="success" sx={{ '& .MuiBadge-badge': { fontSize: 10, height: 16, minWidth: 16 } }} />} 
-            iconPosition="end"
-          />
-        </Tabs>
-      </Paper>
-      
-      {/* Orders List */}
+      {/* Orders Grid */}
       {sortedOrders.length === 0 ? (
-        <Card sx={{ py: 10, textAlign: 'center' }}>
-          <DrinkIcon sx={{ fontSize: 48, color: 'text.secondary', opacity: 0.5, mb: 2 }} />
-          <Typography variant="h6" color="text.secondary">
-            No drink orders in this category
+        <Card sx={{ py: 10, textAlign: 'center', borderRadius: 2 }}>
+          <DrinkIcon sx={{ fontSize: 60, color: 'text.secondary', opacity: 0.5, mb: 2 }} />
+          <Typography variant="h5" color="text.secondary">
+            No orders in this category
           </Typography>
         </Card>
       ) : (
@@ -315,29 +381,34 @@ export default function BartenderDashboard() {
           {sortedOrders.map(order => (
             <Grid item xs={12} md={6} lg={4} key={order.id}>
               <Card 
+                elevation={3}
                 sx={{ 
-                  border: order.priority ? `1px solid ${theme.palette.error.main}` : undefined,
+                  borderRadius: 2,
+                  border: order.priority ? `2px solid ${theme.palette.error.main}` : undefined,
                   position: 'relative',
-                  overflow: 'visible'
+                  overflow: 'visible',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
                 }}
               >
                 {order.priority && (
                   <Box
                     sx={{
                       position: 'absolute',
-                      top: -12,
-                      right: -12,
+                      top: -15,
+                      right: -15,
                       bgcolor: theme.palette.error.main,
                       color: theme.palette.error.contrastText,
                       borderRadius: '50%',
-                      width: 24,
-                      height: 24,
+                      width: 30,
+                      height: 30,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: 14,
+                      fontSize: 18,
                       fontWeight: 'bold',
-                      boxShadow: 1,
+                      boxShadow: 2,
                       zIndex: 1
                     }}
                   >
@@ -348,87 +419,110 @@ export default function BartenderDashboard() {
                 <CardHeader
                   title={
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="h6">
+                      <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
                         Order {order.id}
                       </Typography>
                       <Chip 
                         label={`Table ${order.table}`} 
                         color="primary" 
-                        size="small" 
-                        variant="outlined"
+                        size="medium" 
+                        sx={{ fontWeight: 'bold', fontSize: 16 }}
                       />
                     </Box>
                   }
                   subheader={
                     <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
-                      <TimerIcon fontSize="small" sx={{ mr: 0.5, color: order.timeElapsed > 15 ? 'error.main' : 'text.secondary' }} />
-                      <Typography variant="body2" color={order.timeElapsed > 15 ? 'error' : 'text.secondary'}>
+                      <TimerIcon fontSize="small" sx={{ mr: 0.5, color: order.timeElapsed > 20 ? 'error.main' : 'text.secondary' }} />
+                      <Typography variant="body1" color={order.timeElapsed > 20 ? 'error' : 'text.secondary'}>
                         {order.timeElapsed} {order.timeElapsed === 1 ? 'minute' : 'minutes'} ago
                       </Typography>
                     </Box>
                   }
-                  action={
-                    <IconButton>
-                      <MoreVertIcon />
-                    </IconButton>
-                  }
                 />
                 <Divider />
-                <CardContent sx={{ pt: 2 }}>
-                  <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Drink</TableCell>
-                          <TableCell align="center">Qty</TableCell>
-                          <TableCell align="center">Status</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {order.items.map((item, idx) => (
-                          <TableRow key={idx} hover>
-                            <TableCell>
-                              <Typography variant="body2">{item.name}</Typography>
-                              {item.notes && (
-                                <Typography variant="caption" color="text.secondary">
-                                  Note: {item.notes}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell align="center">{item.quantity}</TableCell>
-                            <TableCell align="center">
-                              <Chip
-                                size="small"
-                                label={item.ready ? 'Ready' : 'Preparing'}
-                                color={item.ready ? 'success' : 'warning'}
-                                onClick={() => handleItemStatusChange(order.id, item.name)}
-                                clickable
+                <CardContent sx={{ flexGrow: 1, pt: 2 }}>
+                  <Grid container spacing={2}>
+                    {order.items.map((item, idx) => (
+                      <Grid item xs={12} key={idx}>
+                        <Card variant="outlined" sx={{ mb: 1, borderRadius: 1 }}>
+                          <Grid container>
+                            {/* Item Image */}
+                            <Grid item xs={4}>
+                              <CardMedia
+                                component="img"
+                                height="120"
+                                image={item.image}
+                                alt={item.name}
+                                sx={{ objectFit: 'cover' }}
                               />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                  
-                  <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
-                    <Chip
-                      label={order.status}
-                      color={
-                        order.status === 'New' ? 'error' :
-                        order.status === 'In Progress' ? 'warning' :
-                        order.status === 'Ready' ? 'success' :
-                        'default'
-                      }
-                    />
-                    
-                    <Box>
+                            </Grid>
+                            {/* Item Details */}
+                            <Grid item xs={8}>
+                              <CardContent sx={{ p: 2 }}>
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                  <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
+                                    {item.name}
+                                  </Typography>
+                                  <Chip 
+                                    label={`x${item.quantity}`} 
+                                    color="primary"
+                                    size="medium"
+                                    sx={{ fontWeight: 'bold' }}
+                                  />
+                                </Box>
+                                
+                                {item.notes && (
+                                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                    <InfoIcon fontSize="small" color="action" sx={{ mr: 0.5 }} />
+                                    <Typography variant="body2" color="text.secondary">
+                                      {item.notes}
+                                    </Typography>
+                                  </Box>
+                                )}
+                                
+                                <Button
+                                  variant={item.ready ? "contained" : "outlined"}
+                                  color={item.ready ? "success" : "warning"}
+                                  onClick={() => handleItemStatusChange(order.id, item.name)}
+                                  startIcon={item.ready ? <CheckCircleIcon /> : <TimerIcon />}
+                                  fullWidth
+                                  sx={{ mt: 1 }}
+                                >
+                                  {item.ready ? 'Ready' : 'Preparing'}
+                                </Button>
+                              </CardContent>
+                            </Grid>
+                          </Grid>
+                        </Card>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </CardContent>
+                <Divider />
+                <Box sx={{ p: 2, bgcolor: '#f9f9f9' }}>
+                  <Grid container spacing={2} alignItems="center">
+                    <Grid item xs={5}>
+                      <Chip
+                        label={order.status}
+                        color={
+                          order.status === 'New' ? 'error' :
+                          order.status === 'In Progress' ? 'warning' :
+                          order.status === 'Ready' ? 'success' :
+                          'default'
+                        }
+                        size="large"
+                        sx={{ fontWeight: 'bold', fontSize: 16, width: '100%', height: 40 }}
+                      />
+                    </Grid>
+                    <Grid item xs={7}>
                       {order.status === 'New' && (
                         <Button
                           variant="contained"
                           color="primary"
-                          size="small"
+                          fullWidth
+                          size="large"
                           onClick={() => handleOrderStatusChange(order.id, 'In Progress')}
+                          sx={{ height: 48, fontSize: 16 }}
                         >
                           Start Preparing
                         </Button>
@@ -438,7 +532,8 @@ export default function BartenderDashboard() {
                         <Button
                           variant="contained"
                           color="success"
-                          size="small"
+                          fullWidth
+                          size="large"
                           onClick={() => {
                             // Mark all items as ready
                             const updatedOrders = orders.map(o => {
@@ -453,29 +548,32 @@ export default function BartenderDashboard() {
                             });
                             setOrders(updatedOrders);
                           }}
+                          sx={{ height: 48, fontSize: 16 }}
                         >
-                          Mark All Ready
+                          All Drinks Ready
                         </Button>
                       )}
                       
                       {order.status === 'Ready' && (
                         <Button
                           variant="outlined"
-                          color="primary"
-                          size="small"
+                          color="info"
+                          fullWidth
+                          size="large"
                           onClick={() => handleOrderStatusChange(order.id, 'Served')}
+                          sx={{ height: 48, fontSize: 16 }}
                         >
                           Mark Served
                         </Button>
                       )}
-                    </Box>
-                  </Stack>
-                </CardContent>
+                    </Grid>
+                  </Grid>
+                </Box>
               </Card>
             </Grid>
           ))}
         </Grid>
       )}
-    </Box>
+    </Container>
   );
 } 

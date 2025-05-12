@@ -13,6 +13,8 @@ import CashierLayout from './components/CashierLayout';
 import WaiterLayout from './components/WaiterLayout';
 import KitchenLayout from './components/KitchenLayout';
 import BartenderLayout from './components/BartenderLayout';
+import KitchenFullScreenLayout from './components/KitchenFullScreenLayout';
+import BartenderFullScreenLayout from './components/BartenderFullScreenLayout';
 
 // Admin Pages
 import AdminDashboard from './pages/admin/Dashboard';
@@ -243,7 +245,7 @@ function App() {
           {/* Kitchen Routes */}
           <Route path="/kitchen" element={
             <ProtectedRoute allowedRoles={['kitchen']}>
-              <KitchenLayout />
+              <KitchenFullScreenLayout />
             </ProtectedRoute>
           }>
             <Route path="dashboard" element={<KitchenDashboard />} />
@@ -252,7 +254,7 @@ function App() {
           {/* Bartender Routes */}
           <Route path="/bartender" element={
             <ProtectedRoute allowedRoles={['bartender']}>
-              <BartenderLayout />
+              <BartenderFullScreenLayout />
             </ProtectedRoute>
           }>
             <Route path="dashboard" element={<BartenderDashboard />} />

@@ -21,6 +21,7 @@ import {
   PlayArrow as PlayArrowIcon
 } from '@mui/icons-material';
 import { API_ENDPOINTS } from '../../config/api';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 export default function KitchenView() {
   const [orders, setOrders] = useState([]);

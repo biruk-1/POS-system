@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import io from 'socket.io-client';
 import {
   Typography,
   Box,
@@ -34,6 +35,7 @@ import {
   Avatar,
   CircularProgress,
   useTheme,
+  styled,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -44,7 +46,9 @@ import {
   LocalBar as DrinkIcon,
   FilterList as FilterIcon,
   Image as ImageIcon,
+  CloudUpload as CloudUploadIcon,
 } from '@mui/icons-material';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 // Mock food and drink images for demonstration
 const FOOD_IMAGES = [
@@ -98,6 +102,19 @@ const generateMockItems = () => {
   return [...foodItems, ...drinkItems];
 };
 
+// Create a styled Button for file upload
+const VisuallyHiddenInput = styled('input')({
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  height: 1,
+  overflow: 'hidden',
+  position: 'absolute',
+  bottom: 0,
+  left: 0,
+  whiteSpace: 'nowrap',
+  width: 1,
+});
+
 export default function MenuItems() {
   const theme = useTheme();
   const [items, setItems] = useState([]);
@@ -116,26 +133,72 @@ export default function MenuItems() {
     category: '',
     image: '',
   });
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
 
   // Food and drink categories
   const foodCategories = ['Main Course', 'Pasta', 'Pizza', 'Burgers', 'Salad', 'Soup', 'Appetizer', 'Dessert', 'Seafood'];
   const drinkCategories = ['Cocktail', 'Wine', 'Beer', 'Coffee', 'Tea', 'Juice', 'Soft Drink', 'Water'];
 
+  // Socket.IO connection
   useEffect(() => {
-    // Simulate API call
+    const socket = io('http://localhost:5001');
+    
+    socket.on('connect', () => {
+      console.log('Connected to socket server');
+    });
+    
+    socket.on('item_created', (newItem) => {
+      console.log('New item received:', newItem);
+      // Convert price to number
+      const processedItem = {
+        ...newItem,
+        price: parseFloat(newItem.price)
+      };
+      setItems(prevItems => [...prevItems, processedItem]);
+      setSuccess('New item added: ' + newItem.name);
+    });
+    
+    socket.on('item_updated', (updatedItem) => {
+      console.log('Item updated:', updatedItem);
+      // Convert price to number
+      const processedItem = {
+        ...updatedItem,
+        price: parseFloat(updatedItem.price)
+      };
+      setItems(prevItems => 
+        prevItems.map(item => item.id === updatedItem.id ? processedItem : item)
+      );
+      setSuccess('Item updated: ' + updatedItem.name);
+    });
+    
+    socket.on('item_deleted', (deletedItem) => {
+      console.log('Item deleted:', deletedItem);
+      setItems(prevItems => prevItems.filter(item => item.id !== deletedItem.id));
+      setSuccess('Item deleted successfully');
+    });
+    
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Fetch items from API
     const fetchItems = async () => {
       try {
-        // In a real app, we would call the API
-        // const response = await axios.get('http://localhost:5000/api/items', {
-        //   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        // });
-        // setItems(response.data);
-
-        // Using mock data for demonstration
-        setTimeout(() => {
-          setItems(generateMockItems());
-          setLoading(false);
-        }, 1000);
+        setLoading(true);
+        const response = await axios.get('http://localhost:5001/api/items', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        console.log('Fetched items:', response.data);
+        // Convert all prices to numbers
+        const processedItems = response.data.map(item => ({
+          ...item,
+          price: parseFloat(item.price)
+        }));
+        setItems(processedItems);
+        setLoading(false);
       } catch (err) {
         setError('Failed to load menu items. Please try again.');
         console.error(err);
@@ -145,6 +208,23 @@ export default function MenuItems() {
 
     fetchItems();
   }, []);
+
+  // Function to refresh items from the API
+  const refreshItems = async () => {
+    try {
+      const response = await axios.get('http://localhost:5001/api/items', {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      // Convert all prices to numbers
+      const processedItems = response.data.map(item => ({
+        ...item,
+        price: parseFloat(item.price)
+      }));
+      setItems(processedItems);
+    } catch (err) {
+      console.error('Error refreshing items:', err);
+    }
+  };
 
   const handleTabChange = (event, newValue) => {
     setCurrentTab(newValue);
@@ -162,9 +242,11 @@ export default function MenuItems() {
         description: item.description,
         price: item.price,
         item_type: item.item_type,
-        category: item.category,
+        category: item.category || '',
         image: item.image || '',
       });
+      setImagePreview(item.image || '');
+      setImageFile(null);
     } else {
       setSelectedItem(null);
       setFormData({
@@ -175,6 +257,8 @@ export default function MenuItems() {
         category: '',
         image: '',
       });
+      setImagePreview('');
+      setImageFile(null);
     }
     setOpenDialog(true);
   };
@@ -190,6 +274,8 @@ export default function MenuItems() {
       category: '',
       image: '',
     });
+    setImagePreview('');
+    setImageFile(null);
   };
 
   const handleInputChange = (e) => {
@@ -211,6 +297,35 @@ export default function MenuItems() {
       ...formData,
       [name]: value,
     });
+  };
+
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Check file type
+      if (!file.type.match('image/jpeg') && !file.type.match('image/png')) {
+        setError('Please select a JPEG or PNG image.');
+        return;
+      }
+      
+      // Check file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setError('Image must be less than 5MB in size.');
+        return;
+      }
+      
+      setImageFile(file);
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setImagePreview(reader.result);
+      };
+      reader.readAsDataURL(file);
+      
+      // Clear any previous errors
+      setError('');
+    }
   };
 
   const validateForm = () => {
@@ -248,33 +363,44 @@ export default function MenuItems() {
     if (!validateForm()) return;
     
     try {
+      // Create form data to handle file upload
+      const formDataWithImage = new FormData();
+      formDataWithImage.append('name', formData.name);
+      formDataWithImage.append('description', formData.description || '');
+      formDataWithImage.append('price', formData.price);
+      formDataWithImage.append('item_type', formData.item_type);
+      formDataWithImage.append('category', formData.category);
+      
+      // Only append image if a new file was selected
+      if (imageFile) {
+        formDataWithImage.append('image', imageFile);
+      }
+      
       if (selectedItem) {
-        // In a real app, we would call the API to update
-        // const response = await axios.put(`http://localhost:5000/api/items/${selectedItem.id}`, formData, {
-        //   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        // });
+        // Update existing item
+        const response = await axios.put(`http://localhost:5001/api/items/${selectedItem.id}`, formDataWithImage, {
+          headers: { 
+            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'multipart/form-data'
+          }
+        });
         
-        // Update the item in our state
-        const updatedItems = items.map(item => 
-          item.id === selectedItem.id ? { ...item, ...formData } : item
-        );
-        setItems(updatedItems);
+        // Refresh the full items list from the API to ensure we have the latest data
+        await refreshItems();
+        
         setSuccess('Item updated successfully!');
       } else {
-        // In a real app, we would call the API to create
-        // const response = await axios.post('http://localhost:5000/api/items', formData, {
-        //   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        // });
+        // Create new item
+        const response = await axios.post('http://localhost:5001/api/items', formDataWithImage, {
+          headers: { 
+            Authorization: `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'multipart/form-data'
+          }
+        });
         
-        // Add the new item to our state with a mock ID
-        const newItem = {
-          ...formData,
-          id: Math.max(...items.map(item => item.id)) + 1,
-          image: formData.item_type === 'food'
-            ? FOOD_IMAGES[Math.floor(Math.random() * FOOD_IMAGES.length)]
-            : DRINK_IMAGES[Math.floor(Math.random() * DRINK_IMAGES.length)],
-        };
-        setItems([...items, newItem]);
+        // Refresh the full items list from the API to ensure we have the latest data
+        await refreshItems();
+        
         setSuccess('Item created successfully!');
       }
       
@@ -289,13 +415,14 @@ export default function MenuItems() {
     if (!window.confirm('Are you sure you want to delete this item?')) return;
     
     try {
-      // In a real app, we would call the API to delete
-      // await axios.delete(`http://localhost:5000/api/items/${itemId}`, {
-      //   headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      // });
+      // Delete the item through the API
+      await axios.delete(`http://localhost:5001/api/items/${itemId}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
       
-      // Remove the item from our state
-      setItems(items.filter(item => item.id !== itemId));
+      // Refresh the items list instead of just removing from local state
+      await refreshItems();
+      
       setSuccess('Item deleted successfully!');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to delete item');
@@ -311,6 +438,14 @@ export default function MenuItems() {
                          item.category.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesTab && matchesSearch;
   });
+
+  // For the image in the grid display
+  const getItemImageUrl = (item) => {
+    if (item.image && item.image.startsWith('/uploads/')) {
+      return `http://localhost:5001${item.image}`;
+    }
+    return item.image || (item.item_type === 'food' ? FOOD_IMAGES[0] : DRINK_IMAGES[0]);
+  };
 
   if (loading) {
     return (
@@ -397,12 +532,15 @@ export default function MenuItems() {
                 <Box sx={{ position: 'relative' }}>
                   <Box
                     component="img"
-                    src={item.image || (item.item_type === 'food' ? FOOD_IMAGES[0] : DRINK_IMAGES[0])}
+                    src={getItemImageUrl(item)}
                     alt={item.name}
                     sx={{
                       width: '100%',
                       height: 180,
                       objectFit: 'cover',
+                    }}
+                    onError={(e) => {
+                      e.target.src = item.item_type === 'food' ? FOOD_IMAGES[0] : DRINK_IMAGES[0];
                     }}
                   />
                   <Chip
@@ -424,7 +562,7 @@ export default function MenuItems() {
                       {item.name}
                     </Typography>
                     <Chip 
-                      label={`$${item.price.toFixed(2)}`}
+                      label={formatCurrency(item.price)}
                       size="small"
                       sx={{ fontWeight: 'bold' }}
                     />
@@ -467,7 +605,13 @@ export default function MenuItems() {
           {selectedItem ? 'Edit Menu Item' : 'Add New Menu Item'}
         </DialogTitle>
         <DialogContent>
-          <Box component="form" sx={{ mt: 2 }}>
+          <Box component="form" 
+               sx={{ mt: 2 }}
+               onSubmit={(e) => {
+                 e.preventDefault(); // Prevent default form submission
+                 handleSubmit();
+               }}
+          >
             <Grid container spacing={2}>
               <Grid item xs={12}>
                 <TextField
@@ -505,7 +649,7 @@ export default function MenuItems() {
                   onChange={handleInputChange}
                   required
                   InputProps={{
-                    startAdornment: <InputAdornment position="start">$</InputAdornment>,
+                    startAdornment: <InputAdornment position="start">Br</InputAdornment>,
                   }}
                 />
               </Grid>
@@ -545,22 +689,55 @@ export default function MenuItems() {
               </Grid>
               
               <Grid item xs={12}>
-                <TextField
-                  fullWidth
-                  label="Image URL (optional)"
-                  name="image"
-                  value={formData.image}
-                  onChange={handleInputChange}
-                  placeholder="https://example.com/image.jpg"
-                  helperText="Leave empty to use default image"
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <ImageIcon />
-                      </InputAdornment>
-                    ),
-                  }}
-                />
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Button
+                    component="label"
+                    variant="outlined"
+                    startIcon={<CloudUploadIcon />}
+                    sx={{ mb: 1 }}
+                  >
+                    Upload Image
+                    <VisuallyHiddenInput 
+                      type="file" 
+                      accept="image/jpeg,image/png" 
+                      onChange={handleImageChange}
+                    />
+                  </Button>
+                  
+                  {/* Image preview */}
+                  {(imagePreview || formData.image) && (
+                    <Box 
+                      sx={{ 
+                        width: '100%', 
+                        display: 'flex', 
+                        justifyContent: 'center',
+                        borderRadius: 1,
+                        overflow: 'hidden',
+                        border: '1px solid #e0e0e0'
+                      }}
+                    >
+                      <Box
+                        component="img"
+                        src={imagePreview || (formData.image?.startsWith('/uploads/') 
+                          ? `http://localhost:5001${formData.image}` 
+                          : formData.image)}
+                        alt="Preview"
+                        sx={{
+                          width: '100%',
+                          maxHeight: 200,
+                          objectFit: 'contain',
+                        }}
+                        onError={(e) => {
+                          e.target.src = formData.item_type === 'food' ? FOOD_IMAGES[0] : DRINK_IMAGES[0];
+                        }}
+                      />
+                    </Box>
+                  )}
+                  
+                  <Typography variant="caption" color="text.secondary">
+                    Supported formats: JPG, PNG. Max size: 5MB
+                  </Typography>
+                </Box>
               </Grid>
             </Grid>
             
@@ -572,9 +749,13 @@ export default function MenuItems() {
         <DialogActions>
           <Button onClick={handleCloseDialog}>Cancel</Button>
           <Button
-            onClick={handleSubmit}
+            onClick={(e) => {
+              e.preventDefault(); // Prevent any default behavior
+              handleSubmit();
+            }}
             variant="contained"
             color="primary"
+            type="button" // Use button type instead of submit
           >
             {selectedItem ? 'Update Item' : 'Add Item'}
           </Button>

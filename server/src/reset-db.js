@@ -54,6 +54,9 @@ function initializeDatabase() {
       description TEXT,
       price REAL NOT NULL,
       item_type TEXT NOT NULL,
+      image TEXT,
+      image_data BLOB,
+      category TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`, (err) => {
       if (err) console.error('Error creating items table:', err);

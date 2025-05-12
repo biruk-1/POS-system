@@ -29,6 +29,7 @@ import {
   Email as EmailIcon,
   Receipt as ReceiptIcon
 } from '@mui/icons-material';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 // Mock data for demonstration
 const generateMockReceipt = (orderId) => {
@@ -241,8 +242,8 @@ export default function Receipt() {
                         />
                       </TableCell>
                       <TableCell align="center">{item.quantity}</TableCell>
-                      <TableCell align="right">${item.price.toFixed(2)}</TableCell>
-                      <TableCell align="right">${item.subtotal.toFixed(2)}</TableCell>
+                      <TableCell align="right">{formatCurrency(item.price)}</TableCell>
+                      <TableCell align="right">{formatCurrency(item.subtotal)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -257,19 +258,19 @@ export default function Receipt() {
                       <Typography variant="body2">Subtotal:</Typography>
                     </Grid>
                     <Grid item xs={6} sx={{ textAlign: 'right' }}>
-                      <Typography variant="body2">${receipt.subtotal.toFixed(2)}</Typography>
+                      <Typography variant="body2">{formatCurrency(receipt.subtotal)}</Typography>
                     </Grid>
                     <Grid item xs={6}>
                       <Typography variant="body2">Tax (8.5%):</Typography>
                     </Grid>
                     <Grid item xs={6} sx={{ textAlign: 'right' }}>
-                      <Typography variant="body2">${receipt.tax.toFixed(2)}</Typography>
+                      <Typography variant="body2">{formatCurrency(receipt.tax)}</Typography>
                     </Grid>
                     <Grid item xs={6}>
                       <Typography variant="body2">Service Charge (10%):</Typography>
                     </Grid>
                     <Grid item xs={6} sx={{ textAlign: 'right' }}>
-                      <Typography variant="body2">${receipt.serviceCharge.toFixed(2)}</Typography>
+                      <Typography variant="body2">{formatCurrency(receipt.serviceCharge)}</Typography>
                     </Grid>
                     <Grid item xs={12}>
                       <Divider sx={{ my: 1 }} />
@@ -278,7 +279,7 @@ export default function Receipt() {
                       <Typography variant="subtitle1" fontWeight="bold">Total:</Typography>
                     </Grid>
                     <Grid item xs={6} sx={{ textAlign: 'right' }}>
-                      <Typography variant="subtitle1" fontWeight="bold">${receipt.total.toFixed(2)}</Typography>
+                      <Typography variant="subtitle1" fontWeight="bold">{formatCurrency(receipt.total)}</Typography>
                     </Grid>
                   </Grid>
                 </Box>

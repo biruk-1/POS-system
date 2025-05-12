@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
@@ -8,6 +9,11 @@ export default defineConfig({
     fs: {
       strict: false,
       allow: ['..']
+    },
+    proxy: {
+      '/ai': 'http://localhost:5001',
+      '/extensions': 'http://localhost:5001',
+      '/languages': 'http://localhost:5001'
     }
   },
   build: {
@@ -20,5 +26,10 @@ export default defineConfig({
     entries: [
       'src/**/*.{js,jsx,ts,tsx}'
     ]
-  }
+  },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
 }) 

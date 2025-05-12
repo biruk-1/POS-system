@@ -50,6 +50,7 @@ import {
   Cell,
 } from 'recharts';
 import axios from 'axios';
+import { formatCurrency } from '../../utils/currencyFormatter';
 
 // Mock data for demonstration - would be replaced with real API calls
 const generateMockData = () => {
@@ -120,6 +121,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [users, setUsers] = useState([]);
   const theme = useTheme();
   
   // Color scheme for charts
@@ -132,21 +134,47 @@ export default function AdminDashboard() {
   ];
 
   useEffect(() => {
-    // Simulate API call
+    // Fetch data for dashboard
     const fetchData = async () => {
       try {
-        // In a real app, this would be an API call
-        // const response = await axios.get('/api/dashboard/stats');
-        // setData(response.data);
+        setLoading(true);
         
-        // Using mock data for demonstration
-        setTimeout(() => {
-          setData(generateMockData());
-          setLoading(false);
-          setRefreshing(false);
-        }, 1000);
+        // Fetch users data from the API
+        const token = localStorage.getItem('token');
+        const usersResponse = await axios.get('http://localhost:5001/api/users', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        
+        // Store users data
+        setUsers(usersResponse.data);
+        
+        // Generate mock data for other dashboard elements
+        const mockData = generateMockData();
+        
+        // Replace mock activeStaff with real users data
+        const activeUsers = usersResponse.data.map(user => ({
+          id: user.id,
+          name: user.username,
+          role: user.role.charAt(0).toUpperCase() + user.role.slice(1), // Capitalize role
+          status: 'Active', // Default to active for all staff
+          orders: Math.floor(Math.random() * 15), // Keep random order count for now
+        }));
+        
+        setData({
+          ...mockData,
+          activeStaff: activeUsers,
+          totalStaff: activeUsers.length
+        });
+        
+        setLoading(false);
+        setRefreshing(false);
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
+        
+        // Fallback to mock data if API call fails
+        setData(generateMockData());
         setLoading(false);
         setRefreshing(false);
       }
@@ -157,10 +185,6 @@ export default function AdminDashboard() {
 
   const handleRefresh = () => {
     setRefreshing(true);
-    setData(generateMockData());
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 1000);
   };
 
   const getStatusColor = (status) => {
@@ -235,7 +259,7 @@ export default function AdminDashboard() {
                 Total Sales
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                ${data.totalSales.toLocaleString()}
+                {formatCurrency(data.totalSales)}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
                 <TrendingUpIcon fontSize="small" color="success" sx={{ mr: 0.5 }} />
