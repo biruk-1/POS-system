@@ -1,694 +1,1276 @@
 import { useState, useEffect } from 'react';
+import { useSelector } from 'react-redux';
+import axios from 'axios';
+import io from 'socket.io-client';
 import {
+  Box,
   Grid,
   Paper,
   Typography,
-  Box,
-  Card,
-  CardContent,
-  CardHeader,
-  Avatar,
-  IconButton,
-  Divider,
+  Tabs,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Chip,
+  IconButton,
   Button,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
   CircularProgress,
-  LinearProgress,
-  Stack,
-  useTheme,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Chip,
+  Divider,
+  Alert,
+  Snackbar,
+  useTheme
 } from '@mui/material';
 import {
-  MoreVert as MoreVertIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  Add as AddIcon,
+  FilterList as FilterIcon,
   TrendingUp as TrendingUpIcon,
-  AttachMoney as MoneyIcon,
-  Restaurant as RestaurantIcon,
-  LocalBar as DrinkIcon,
-  ShoppingCart as CartIcon,
-  Person as PersonIcon,
-  Timer as TimerIcon,
-  Refresh as RefreshIcon,
+  RemoveCircle as RemoveCircleIcon,
+  ViewList as ViewListIcon,
+  Save as SaveIcon,
+  Cancel as CancelIcon,
+  GetApp as DownloadIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
-import {
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts';
-import axios from 'axios';
 import { formatCurrency } from '../../utils/currencyFormatter';
 
-// Mock data for demonstration - would be replaced with real API calls
-const generateMockData = () => {
-  // Mock sales data (last 7 days)
-  const salesData = [];
-  const today = new Date();
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  
-  for (let i = 6; i >= 0; i--) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    const dayName = dayNames[date.getDay()];
-    
-    salesData.push({
-      day: dayName,
-      sales: Math.floor(Math.random() * 1000) + 500,
-      orders: Math.floor(Math.random() * 20) + 10,
-    });
-  }
-  
-  // Mock item sales (pie chart)
-  const categoryData = [
-    { name: 'Main Dishes', value: Math.floor(Math.random() * 200) + 100 },
-    { name: 'Appetizers', value: Math.floor(Math.random() * 150) + 50 },
-    { name: 'Desserts', value: Math.floor(Math.random() * 100) + 30 },
-    { name: 'Drinks', value: Math.floor(Math.random() * 180) + 90 },
-    { name: 'Specials', value: Math.floor(Math.random() * 80) + 20 },
-  ];
-  
-  // Recent orders
-  const statusOptions = ['Completed', 'In Progress', 'Pending'];
-  const tableOptions = Array.from({ length: 10 }, (_, i) => i + 1);
-  
-  const recentOrders = Array.from({ length: 5 }, (_, i) => ({
-    id: `ORD-${Math.floor(1000 + Math.random() * 9000)}`,
-    table: tableOptions[Math.floor(Math.random() * tableOptions.length)],
-    items: Math.floor(Math.random() * 10) + 1,
-    amount: Math.floor(Math.random() * 200) + 20,
-    status: statusOptions[Math.floor(Math.random() * statusOptions.length)],
-    time: `${Math.floor(Math.random() * 50) + 10} min ago`,
-  }));
-  
-  // Active staff
-  const roles = ['Waiter', 'Cashier', 'Kitchen', 'Bartender'];
-  const names = ['John Doe', 'Jane Smith', 'Mike Johnson', 'Sarah Williams', 'Robert Brown', 'Lisa Davis'];
-  
-  const activeStaff = Array.from({ length: 5 }, (_, i) => ({
-    id: i + 1,
-    name: names[Math.floor(Math.random() * names.length)],
-    role: roles[Math.floor(Math.random() * roles.length)],
-    status: Math.random() > 0.3 ? 'Active' : 'On Break',
-    orders: Math.floor(Math.random() * 15),
-  }));
-  
-  return {
-    salesData,
-    categoryData,
-    recentOrders,
-    activeStaff,
-    totalSales: salesData.reduce((sum, day) => sum + day.sales, 0),
-    totalOrders: salesData.reduce((sum, day) => sum + day.orders, 0),
-    totalItems: categoryData.reduce((sum, category) => sum + category.value, 0),
-    totalStaff: activeStaff.length,
-  };
-};
-
 export default function AdminDashboard() {
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-  const [users, setUsers] = useState([]);
   const theme = useTheme();
+  const token = useSelector((state) => state.auth.token);
+  const [activeTab, setActiveTab] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [orders, setOrders] = useState([]);
+  const [filteredOrders, setFilteredOrders] = useState([]);
+  const [sales, setSales] = useState({
+    daily: [],
+    weekly: [],
+    monthly: [],
+    yearly: []
+  });
+  const [selectedWaiter, setSelectedWaiter] = useState('all');
+  const [waiters, setWaiters] = useState([]);
+  const [timeRange, setTimeRange] = useState('daily');
   
-  // Color scheme for charts
-  const COLORS = [
-    theme.palette.primary.main,
-    theme.palette.secondary.main,
-    theme.palette.success.main,
-    theme.palette.warning.main,
-    theme.palette.error.main,
-  ];
+  // For order search
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [dateRange, setDateRange] = useState({
+    startDate: null,
+    endDate: null
+  });
+  
+  // For order editing
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [currentOrder, setCurrentOrder] = useState(null);
+  const [orderItems, setOrderItems] = useState([]);
+  const [editedOrder, setEditedOrder] = useState(null);
+  
+  // For notifications
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: '',
+    severity: 'success'
+  });
 
   useEffect(() => {
-    // Fetch data for dashboard
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        
-        // Fetch users data from the API
-        const token = localStorage.getItem('token');
-        const usersResponse = await axios.get('http://localhost:5001/api/users', {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-        
-        // Store users data
-        setUsers(usersResponse.data);
-        
-        // Generate mock data for other dashboard elements
-        const mockData = generateMockData();
-        
-        // Replace mock activeStaff with real users data
-        const activeUsers = usersResponse.data.map(user => ({
-          id: user.id,
-          name: user.username,
-          role: user.role.charAt(0).toUpperCase() + user.role.slice(1), // Capitalize role
-          status: 'Active', // Default to active for all staff
-          orders: Math.floor(Math.random() * 15), // Keep random order count for now
-        }));
-        
-        setData({
-          ...mockData,
-          activeStaff: activeUsers,
-          totalStaff: activeUsers.length
-        });
-        
-        setLoading(false);
-        setRefreshing(false);
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-        
-        // Fallback to mock data if API call fails
-        setData(generateMockData());
-        setLoading(false);
-        setRefreshing(false);
+    fetchWaiters();
+    fetchOrders();
+    
+    // Use the new function for sales
+    if (activeTab === 1) {
+      console.log("Initial fetch of sales data");
+      fetchSalesWithWaiter('all');
+    }
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  
+  // Update filtered orders when either all orders, selected waiter, search term, or status filter changes
+  useEffect(() => {
+    if (orders.length > 0) {
+      let filtered = [...orders];
+      
+      // Apply waiter filter
+      if (selectedWaiter !== 'all') {
+        filtered = filtered.filter(order => 
+          order.waiter_id === parseInt(selectedWaiter)
+        );
+      }
+      
+      // Apply search term filter
+      if (searchTerm.trim() !== '') {
+        const search = searchTerm.toLowerCase();
+        filtered = filtered.filter(order => 
+          String(order.id).includes(search) || 
+          (order.waiter_name && order.waiter_name.toLowerCase().includes(search))
+        );
+      }
+      
+      // Apply status filter
+      if (statusFilter !== 'all') {
+        filtered = filtered.filter(order => order.status === statusFilter);
+      }
+      
+      // Apply date range filter
+      if (dateRange.startDate) {
+        const startDate = new Date(dateRange.startDate);
+        startDate.setHours(0, 0, 0, 0);
+        filtered = filtered.filter(order => new Date(order.created_at) >= startDate);
+      }
+      
+      if (dateRange.endDate) {
+        const endDate = new Date(dateRange.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(order => new Date(order.created_at) <= endDate);
+      }
+      
+      setFilteredOrders(filtered);
+    }
+  }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
+
+  // Socket.IO connection for real-time updates
+  useEffect(() => {
+    const socket = io('http://localhost:5001');
+    
+    socket.on('connect', () => {
+      console.log('Admin connected to socket server');
+    });
+    
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to connect to real-time updates server',
+        severity: 'error'
+      });
+    });
+    
+    // Function to refresh appropriate data based on current active tab
+    const refreshData = () => {
+      fetchOrders();
+      if (activeTab === 1) {
+        fetchSales();
       }
     };
+    
+    socket.on('order_created', (newOrder) => {
+      console.log('New order received:', newOrder);
+      refreshData();
+      
+      setSnackbar({
+        open: true,
+        message: `New order #${newOrder.id} has been created`,
+        severity: 'success'
+      });
+    });
+    
+    socket.on('order_status_updated', (updatedOrder) => {
+      console.log('Order status update received:', updatedOrder);
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.id === updatedOrder.id ? 
+          { ...order, status: updatedOrder.status } : 
+          order
+        )
+      );
+      
+      // If an order was marked as completed or paid, refresh all sales data
+      if (updatedOrder.status === 'paid' || updatedOrder.status === 'completed') {
+        console.log('Order marked as completed/paid, refreshing all sales data');
+        fetchSales();
+        
+        // Show success notification
+        setSnackbar({
+          open: true,
+          message: `Order #${updatedOrder.id} completed - sales data updated`,
+          severity: 'success'
+        });
+      }
+    });
+    
+    // Listen for specific admin sales updates
+    socket.on('admin_sales_updated', (data) => {
+      console.log('Admin sales update received:', data);
+      
+      // Refresh sales data for all time ranges to ensure consistent numbers
+      fetchSales();
+      
+      setSnackbar({
+        open: true,
+        message: `Sales data updated - order #${data.order_id || 'unknown'}`,
+        severity: 'info'
+      });
+    });
+    
+    socket.on('order_updated', (updatedOrder) => {
+      console.log('Order updated received:', updatedOrder);
+      refreshData();
+      
+      setSnackbar({
+        open: true,
+        message: `Order #${updatedOrder.id} has been updated`,
+        severity: 'info'
+      });
+    });
+    
+    socket.on('order_deleted', (deletedOrder) => {
+      console.log('Order deleted received:', deletedOrder);
+      refreshData();
+      
+      setSnackbar({
+        open: true,
+        message: `Order #${deletedOrder.id} has been deleted`,
+        severity: 'info'
+      });
+    });
+    
+    return () => {
+      socket.disconnect();
+    };
+  }, [activeTab, token]);
 
-    fetchData();
-  }, [refreshing]);
+  // Re-fetch sales data when waiter selection changes
+  useEffect(() => {
+    if (activeTab === 1) { // Only if we're on the sales tab
+      fetchSales();
+    }
+  }, [selectedWaiter, timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'Completed':
-        return 'success';
-      case 'In Progress':
-        return 'warning';
-      case 'Pending':
-        return 'error';
-      case 'Active':
-        return 'success';
-      case 'On Break':
-        return 'warning';
-      default:
-        return 'default';
+  const fetchWaiters = async () => {
+    try {
+      const response = await axios.get('http://localhost:5001/api/waiters', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setWaiters(response.data);
+    } catch (error) {
+      console.error('Error fetching waiters:', error);
     }
   };
 
+  const fetchOrders = async () => {
+      try {
+        setLoading(true);
+      const response = await axios.get('http://localhost:5001/api/orders', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setOrders(response.data);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      setLoading(false);
+    }
+  };
+
+  const fetchSales = async () => {
+    // Just delegate to our new function for consistency
+    return fetchSalesWithWaiter(selectedWaiter);
+  };
+  
+  const fetchOrderDetails = async (orderId) => {
+    try {
+      const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      setCurrentOrder(response.data);
+      setOrderItems(response.data.items || []);
+      setEditedOrder({
+        ...response.data,
+        items: [...response.data.items || []]
+      });
+      
+      setEditDialogOpen(true);
+    } catch (error) {
+      console.error('Error fetching order details:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to load order details',
+        severity: 'error'
+      });
+    }
+  };
+
+  const handleEditOrder = (orderId) => {
+    fetchOrderDetails(orderId);
+  };
+  
+  const handleDeleteOrder = async (orderId) => {
+    if (!window.confirm('Are you sure you want to delete this order? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      await axios.delete(`http://localhost:5001/api/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      // Update local state
+      setOrders(orders.filter(order => order.id !== orderId));
+      
+      setSnackbar({
+        open: true,
+        message: 'Order deleted successfully',
+        severity: 'success'
+      });
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to delete order',
+        severity: 'error'
+      });
+    }
+  };
+  
+  const handleRemoveItem = (itemId) => {
+    setEditedOrder({
+      ...editedOrder,
+      items: editedOrder.items.filter(item => item.id !== itemId)
+    });
+  };
+  
+  const handleUpdateItem = (itemId, field, value) => {
+    setEditedOrder({
+      ...editedOrder,
+      items: editedOrder.items.map(item => 
+        item.id === itemId ? { ...item, [field]: value } : item
+      )
+    });
+  };
+  
+  const handleSaveOrder = async () => {
+    try {
+      // Calculate new total based on current items
+      const newTotal = editedOrder.items.reduce(
+        (sum, item) => sum + (item.price * item.quantity), 
+        0
+      );
+      
+      // Update order with new total and items
+      await axios.put(`http://localhost:5001/api/orders/${editedOrder.id}`, {
+        items: editedOrder.items,
+        total_amount: newTotal,
+        status: editedOrder.status
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      // Close dialog and refetch all orders
+      setEditDialogOpen(false);
+      fetchOrders();
+      
+      setSnackbar({
+        open: true,
+        message: 'Order updated successfully',
+        severity: 'success'
+      });
+      } catch (error) {
+      console.error('Error updating order:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to update order',
+        severity: 'error'
+      });
+    }
+  };
+
+  const handleTabChange = (event, newValue) => {
+    console.log(`Switching to tab ${newValue} from ${activeTab}`);
+    setActiveTab(newValue);
+    
+    // If switching to sales tab, refresh sales data with current waiter filter
+    if (newValue === 1) {
+      console.log(`Tab changed to Sales, fetching data with current waiter: ${selectedWaiter}`);
+      fetchSalesWithWaiter(selectedWaiter);
+    }
+  };
+
+  const handleWaiterFilter = (event) => {
+    const newWaiterId = event.target.value;
+    console.log(`Setting selected waiter to: ${newWaiterId}`);
+    
+    // Immediately fetch with the new value instead of using state
+    if (activeTab === 1) {
+      fetchSalesWithWaiter(newWaiterId);
+    }
+    
+    // Then update the state for UI and other components
+    setSelectedWaiter(newWaiterId);
+  };
+
+  // New function to fetch sales with a specific waiter
+  const fetchSalesWithWaiter = async (waiterId, customTimeRange = null) => {
+    try {
+      // Use the passed timeRange if provided, otherwise use state
+      const timeRangeToUse = customTimeRange || timeRange;
+      
+      console.log(`Fetching sales data for time range: ${timeRangeToUse}, waiter: ${waiterId}`);
+      
+      // Show loading state
+      setLoading(true);
+      
+      // Use different endpoints for daily vs other time ranges
+      const endpoint = timeRangeToUse === 'daily' 
+        ? 'http://localhost:5001/api/sales/daily'
+        : `http://localhost:5001/api/sales/${timeRangeToUse}`;
+      
+      const params = { 
+        waiter_id: waiterId,
+        _t: new Date().getTime()  // Cache buster
+      };
+      
+      const response = await axios.get(endpoint, {
+        headers: { Authorization: `Bearer ${token}` },
+        params
+      });
+      
+      console.log(`Received response for waiter ${waiterId}:`, response.data);
+      
+      // Handle the response based on the time range
+      if (timeRangeToUse === 'daily') {
+        // Process daily sales data
+        const salesData = {
+          totalSales: response.data.totalSales || 0,
+          completedOrders: response.data.completedOrders || 0,
+          waiterStats: response.data.waiterStats || []
+        };
+        
+        // Map the data to match the expected format
+        const processedData = [{
+          date: new Date().toISOString().split('T')[0],
+          totalSales: salesData.totalSales,
+          completedOrders: salesData.completedOrders,
+          waiters: salesData.waiterStats.map(stat => ({
+            waiter_id: stat.waiter_id,
+            waiter_name: stat.waiter_name,
+            order_count: parseInt(stat.order_count || 0),
+            total_sales: parseFloat(stat.total_sales || 0)
+          }))
+        }];
+        
+        setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: processedData }));
+      } else {
+        // For weekly, monthly, and yearly views
+        const timeRangeData = response.data[timeRangeToUse] || [];
+        
+        if (timeRangeData.length === 0) {
+          console.log(`No sales data returned for ${timeRangeToUse} with waiter: ${waiterId}`);
+          
+          // Create default entries with zero values
+          if (waiterId === 'all') {
+            if (waiters.length > 0) {
+              const defaultEntry = {
+                date: new Date().toISOString().split('T')[0],
+                totalSales: 0,
+                completedOrders: 0,
+                waiters: waiters.map(waiter => ({
+                  waiter_id: waiter.id,
+                  waiter_name: waiter.username,
+                  order_count: 0,
+                  total_sales: 0
+                }))
+              };
+              
+              setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: [defaultEntry] }));
+            }
+          } else {
+            const selectedWaiter = waiters.find(w => w.id === parseInt(waiterId));
+            if (selectedWaiter) {
+              const defaultEntry = {
+                date: new Date().toISOString().split('T')[0],
+                totalSales: 0,
+                completedOrders: 0,
+                waiters: [{
+                  waiter_id: selectedWaiter.id,
+                  waiter_name: selectedWaiter.username,
+                  order_count: 0,
+                  total_sales: 0
+                }]
+              };
+              
+              setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: [defaultEntry] }));
+            }
+          }
+        } else {
+          // Process and store the data
+          setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: timeRangeData }));
+        }
+      }
+    } catch (error) {
+      console.error(`Error fetching sales for waiter ${waiterId}:`, error);
+      
+      const timeRangeToUse = customTimeRange || timeRange;
+      
+      // Set error state with appropriate format
+      setSales(prevSales => ({ 
+        ...prevSales, 
+        [timeRangeToUse]: [{
+          date: new Date().toISOString().split('T')[0],
+          totalSales: 0,
+          completedOrders: 0,
+          waiters: [{
+            waiter_id: 0,
+            waiter_name: "Error Loading Data",
+            order_count: 0,
+            total_sales: 0
+          }]
+        }]
+      }));
+      
+      setSnackbar({
+        open: true,
+        message: 'Failed to load sales data',
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTimeRangeChange = (event) => {
+    const newTimeRange = event.target.value;
+    setTimeRange(newTimeRange);
+    
+    // Immediately fetch data with the new time range
+    if (activeTab === 1) {
+      fetchSalesWithWaiter(selectedWaiter, newTimeRange);
+    }
+  };
+
+  const handleSearchChange = (event) => {
+    setSearchTerm(event.target.value);
+  };
+  
+  const handleStatusFilterChange = (event) => {
+    setStatusFilter(event.target.value);
+  };
+  
+  const handleDateRangeChange = (type, event) => {
+    setDateRange(prev => ({
+      ...prev,
+      [type]: event.target.value
+    }));
+  };
+  
+  const handleExportCSV = () => {
+    // Only export if there are orders to export
+    if (filteredOrders.length === 0) {
+      setSnackbar({
+        open: true,
+        message: 'No orders to export',
+        severity: 'warning'
+      });
+      return;
+    }
+    
+    // Convert orders to CSV format
+    const headers = ['Order ID', 'Waiter', 'Date', 'Total Amount', 'Status'];
+    
+    const csvContent = [
+      // Headers
+      headers.join(','),
+      // Data rows
+      ...filteredOrders.map(order => [
+        order.id,
+        order.waiter_name || 'N/A',
+        new Date(order.created_at).toLocaleString(),
+        order.total_amount || 0,
+        order.status || 'pending'
+      ].join(','))
+    ].join('\n');
+    
+    // Create a blob and download link
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    
+    // Create filename with current date
+    const date = new Date().toISOString().split('T')[0];
+    link.setAttribute('download', `orders-export-${date}.csv`);
+    
+    // Trigger download and cleanup
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    setSnackbar({
+      open: true,
+      message: `Exported ${filteredOrders.length} orders successfully`,
+      severity: 'success'
+    });
+  };
+  
+  const handleCloseSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false });
+  };
+
+  const handleRefreshOrders = () => {
+    setLoading(true);
+    fetchOrders()
+      .then(() => {
+        setSnackbar({
+          open: true,
+          message: 'Orders refreshed successfully',
+          severity: 'success'
+        });
+      })
+      .catch((error) => {
+        console.error('Error refreshing orders:', error);
+        setSnackbar({
+          open: true,
+          message: 'Failed to refresh orders',
+          severity: 'error'
+        });
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+  
+  const handleRefreshSales = () => {
+    console.log(`Manually refreshing sales data with waiter: ${selectedWaiter}`);
+    fetchSalesWithWaiter(selectedWaiter)
+      .then(() => {
+        setSnackbar({
+          open: true,
+          message: 'Sales data refreshed successfully',
+          severity: 'success'
+        });
+      })
+      .catch((error) => {
+        console.error('Error refreshing sales:', error);
+        setSnackbar({
+          open: true,
+          message: 'Failed to refresh sales data',
+          severity: 'error'
+        });
+      });
+  };
+
+  const renderOrdersTab = () => (
+    <Box>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Typography variant="h6">Orders</Typography>
+          <IconButton
+            color="primary"
+            onClick={handleRefreshOrders}
+            disabled={loading}
+            title="Refresh Orders"
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <TextField
+            placeholder="Search by ID or waiter..."
+            size="small"
+            value={searchTerm}
+            onChange={handleSearchChange}
+            sx={{ width: 200 }}
+            InputProps={{
+              startAdornment: (
+                <Box component="span" sx={{ color: 'action.active', mr: 1 }}>
+                  🔍
+                </Box>
+              ),
+            }}
+          />
+          <FormControl sx={{ minWidth: 150 }}>
+            <InputLabel>Status</InputLabel>
+            <Select
+              value={statusFilter}
+              onChange={handleStatusFilterChange}
+              label="Status"
+              size="small"
+            >
+              <MenuItem value="all">All Statuses</MenuItem>
+              <MenuItem value="pending">Pending</MenuItem>
+              <MenuItem value="in-progress">In Progress</MenuItem>
+              <MenuItem value="completed">Completed</MenuItem>
+              <MenuItem value="paid">Paid</MenuItem>
+              <MenuItem value="cancelled">Cancelled</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl sx={{ minWidth: 200 }}>
+            <InputLabel>Waiter</InputLabel>
+            <Select
+              value={selectedWaiter}
+              onChange={handleWaiterFilter}
+              label="Filter by Waiter"
+              size="small"
+            >
+              <MenuItem value="all">All Waiters</MenuItem>
+              {waiters.map((waiter) => (
+                <MenuItem key={waiter.id} value={waiter.id}>
+                  {waiter.username}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
+      </Box>
+      
+      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>Date Range:</Typography>
+        <TextField
+          label="From"
+          type="date"
+          size="small"
+          InputLabelProps={{ shrink: true }}
+          value={dateRange.startDate || ''}
+          onChange={(e) => handleDateRangeChange('startDate', e)}
+        />
+        <TextField
+          label="To"
+          type="date"
+          size="small"
+          InputLabelProps={{ shrink: true }}
+          value={dateRange.endDate || ''}
+          onChange={(e) => handleDateRangeChange('endDate', e)}
+        />
+        {(dateRange.startDate || dateRange.endDate) && (
+        <Button
+            size="small" 
+          variant="outlined"
+            onClick={() => setDateRange({ startDate: null, endDate: null })}
+        >
+            Clear Dates
+        </Button>
+        )}
+      </Box>
+
+      <Box sx={{ mb: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.primary.light, color: 'white' }}>
+            <Typography variant="body2">Filtered Orders</Typography>
+            <Typography variant="h4">{filteredOrders.length}</Typography>
+          </Paper>
+          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.secondary.main, color: 'white' }}>
+            <Typography variant="body2">Total Amount</Typography>
+            <Typography variant="h4">
+              {formatCurrency(
+                filteredOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0)
+              )}
+              </Typography>
+          </Paper>
+          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.success.main, color: 'white' }}>
+            <Typography variant="body2">Paid Orders</Typography>
+            <Typography variant="h4">
+              {filteredOrders.filter(order => order.status === 'paid').length}
+              </Typography>
+          </Paper>
+          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.warning.main, color: 'white' }}>
+            <Typography variant="body2">Pending Orders</Typography>
+            <Typography variant="h4">
+              {filteredOrders.filter(order => order.status === 'pending').length}
+              </Typography>
+          </Paper>
+        </Box>
+        <Button
+          variant="contained"
+          color="primary"
+          startIcon={<DownloadIcon />}
+          onClick={handleExportCSV}
+          disabled={filteredOrders.length === 0}
+          sx={{ height: 'fit-content', alignSelf: 'center' }}
+        >
+          Export CSV
+        </Button>
+      </Box>
+
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead sx={{ bgcolor: theme.palette.primary.main }}>
+            <TableRow>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Order ID</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Waiter</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Date</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Items</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Total Amount</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Status</TableCell>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {Array.isArray(filteredOrders) && filteredOrders.length > 0 ? (
+              filteredOrders.map((order) => (
+                <TableRow key={order.id} hover>
+                  <TableCell>{order.id}</TableCell>
+                  <TableCell>{order.waiter_name || 'N/A'}</TableCell>
+                  <TableCell>{new Date(order.created_at).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <Button
+                      size="small"
+                      startIcon={<ViewListIcon />}
+                      variant="outlined"
+                      onClick={() => handleEditOrder(order.id)}
+                    >
+                      View Items
+                    </Button>
+                  </TableCell>
+                  <TableCell sx={{ fontWeight: 'bold' }}>{formatCurrency(order.total_amount || 0)}</TableCell>
+                  <TableCell>
+                    <Chip 
+                      label={order.status || 'pending'} 
+                      color={
+                        order.status === 'completed' || order.status === 'paid' ? 'success' :
+                        order.status === 'in-progress' ? 'warning' :
+                        order.status === 'cancelled' ? 'error' : 'default'
+                      }
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <IconButton 
+                      color="primary" 
+                      onClick={() => handleEditOrder(order.id)}
+                      title="Edit Order"
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton 
+                      color="error" 
+                      onClick={() => handleDeleteOrder(order.id)}
+                      title="Delete Order"
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={7} align="center">
+                  <Typography>No orders found</Typography>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+            </Box>
+  );
+
+  const renderSalesTab = () => {
+    // Get the current sales data
+    const currentSales = sales[timeRange] || [];
+    
+    // Process the sales data based on time range
+    let processedSales = [];
+    let totalSales = 0;
+    let totalOrders = 0;
+    
+    if (timeRange === 'daily' && currentSales.length > 0) {
+      // For daily view, process waiters array
+      processedSales = currentSales[0].waiters.map(waiter => ({
+        waiter_id: waiter.waiter_id,
+        waiter_name: waiter.waiter_name,
+        order_count: waiter.order_count,
+        total_sales: waiter.total_sales,
+        avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
+      }));
+      totalSales = currentSales[0].totalSales;
+      totalOrders = currentSales[0].completedOrders;
+    } else {
+      // For weekly, monthly, and yearly views
+      // Aggregate data for each waiter across all dates
+      const waiterTotals = {};
+      
+      currentSales.forEach(dateData => {
+        // Add to total sales and orders
+        totalSales += parseFloat(dateData.totalSales || 0);
+        totalOrders += parseInt(dateData.completedOrders || 0);
+        
+        // Process each waiter's data
+        dateData.waiters.forEach(waiter => {
+          if (!waiterTotals[waiter.waiter_id]) {
+            waiterTotals[waiter.waiter_id] = {
+              waiter_id: waiter.waiter_id,
+              waiter_name: waiter.waiter_name,
+              order_count: 0,
+              total_sales: 0
+            };
+          }
+          
+          waiterTotals[waiter.waiter_id].order_count += parseInt(waiter.order_count || 0);
+          waiterTotals[waiter.waiter_id].total_sales += parseFloat(waiter.total_sales || 0);
+        });
+      });
+      
+      // Convert waiter totals to array and calculate average order values
+      processedSales = Object.values(waiterTotals).map(waiter => ({
+        ...waiter,
+        avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
+      }));
+    }
+    
+    // Sort sales data by total_sales in descending order
+    const sortedSales = processedSales.sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
+    
+    // Create a rank map for quick lookup
+    const rankMap = {};
+    sortedSales.forEach((sale, index) => {
+      rankMap[sale.waiter_id] = index + 1;
+    });
+    
+    return (
+      <Box>
+        <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="h6">Sales Tracking</Typography>
+            <IconButton
+              color="primary"
+              onClick={handleRefreshSales}
+              title="Refresh Sales Data"
+              disabled={loading}
+            >
+              {loading ? <CircularProgress size={24} /> : <RefreshIcon />}
+            </IconButton>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <FormControl sx={{ minWidth: 200 }}>
+              <InputLabel>Time Range</InputLabel>
+              <Select
+                value={timeRange}
+                onChange={handleTimeRangeChange}
+                label="Time Range"
+                disabled={loading}
+              >
+                <MenuItem value="daily">Daily</MenuItem>
+                <MenuItem value="weekly">Weekly</MenuItem>
+                <MenuItem value="monthly">Monthly</MenuItem>
+                <MenuItem value="yearly">Yearly</MenuItem>
+              </Select>
+            </FormControl>
+            <FormControl sx={{ minWidth: 200 }}>
+              <InputLabel>Filter by Waiter</InputLabel>
+              <Select
+                value={selectedWaiter}
+                onChange={handleWaiterFilter}
+                label="Filter by Waiter"
+                disabled={loading}
+              >
+                <MenuItem value="all">All Waiters</MenuItem>
+                {waiters.map((waiter) => (
+                  <MenuItem key={waiter.id} value={waiter.id}>
+                    {waiter.username}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+        </Box>
+
+        {loading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
+            <CircularProgress />
+          </Box>
+        ) : (
+          <>
+            <Paper sx={{ p: 3, mb: 3 }}>
+              <Grid container spacing={3}>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Typography variant="body2" color="text.secondary">Total Sales</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                    {formatCurrency(totalSales)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Typography variant="body2" color="text.secondary">Orders Completed</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                    {totalOrders}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Typography variant="body2" color="text.secondary">Average Order Value</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                    {formatCurrency(totalOrders > 0 ? totalSales / totalOrders : 0)}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Typography variant="body2" color="text.secondary">Time Period</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
+                    {timeRange === 'daily' ? 'Today' : 
+                     timeRange === 'weekly' ? 'This Week' : 
+                     timeRange === 'monthly' ? 'This Month' : 'This Year'}
+                  </Typography>
+                </Grid>
+              </Grid>
+            </Paper>
+
+            <Grid container spacing={3}>
+              {sortedSales.length > 0 ? (
+                sortedSales.map((sale) => (
+                  <Grid item xs={12} sm={6} md={4} key={sale.waiter_id || 'sale-' + Math.random()}>
+                    <Paper 
+                      sx={{
+                        p: 3, 
+                        borderTop: `4px solid ${theme.palette.primary.main}`,
+                        boxShadow: 2,
+                        height: '100%',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <Typography variant="h6" gutterBottom color="text.primary">
+                        {sale.waiter_name || 'Unknown'}
+                      </Typography>
+                      <Typography variant="h4" color="primary" sx={{ fontWeight: 'bold' }}>
+                        {formatCurrency(sale.total_sales || 0)}
+                      </Typography>
+                      
+                      <Box sx={{ mt: 2, mb: 1 }}>
+                        <Divider />
+                      </Box>
+                      
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                        <Typography variant="body1" color="text.secondary">
+                          Total Orders:
+                        </Typography>
+                        <Typography variant="body1" fontWeight="bold">
+                          {sale.order_count || 0}
+                        </Typography>
+                      </Box>
+                      
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+                        <Typography variant="body1" color="text.secondary">
+                          Avg. Order:
+                        </Typography>
+                        <Typography variant="body1" fontWeight="bold">
+                          {formatCurrency(sale.avgOrder || 0)}
+                        </Typography>
+                      </Box>
+                      
+                      <Box sx={{ 
+                        mt: 'auto', 
+                        pt: 2,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        <Chip
+                          label={`Rank: ${rankMap[sale.waiter_id] || 'N/A'}`}
+                          color="primary"
+                          size="small"
+                          sx={{ fontWeight: 'bold' }}
+                        />
+                      </Box>
+                    </Paper>
+                  </Grid>
+                ))
+              ) : (
+                <Grid item xs={12}>
+                  <Paper sx={{ p: 3, textAlign: 'center' }}>
+                    <Typography variant="h6" color="text.secondary">
+                      No sales data available for this period
+                    </Typography>
+                  </Paper>
+                </Grid>
+              )}
+            </Grid>
+          </>
+        )}
+      </Box>
+    );
+  };
+
+  // Order editing dialog
+  const renderOrderEditDialog = () => (
+    <Dialog 
+      open={editDialogOpen} 
+      onClose={() => setEditDialogOpen(false)}
+      fullWidth
+      maxWidth="md"
+    >
+      <DialogTitle sx={{ bgcolor: theme.palette.primary.main, color: 'white' }}>
+        Edit Order #{editedOrder?.id}
+      </DialogTitle>
+      <DialogContent dividers>
+        {editedOrder ? (
+          <Box>
+            <Grid container spacing={2} sx={{ mb: 3 }}>
+              <Grid item xs={12} sm={6} md={3}>
+                <Typography variant="subtitle2" color="text.secondary">Order ID</Typography>
+                <Typography variant="body1">{editedOrder.id}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Typography variant="subtitle2" color="text.secondary">Waiter</Typography>
+                <Typography variant="body1">{editedOrder.waiter_name || 'N/A'}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Typography variant="subtitle2" color="text.secondary">Date</Typography>
+                <Typography variant="body1">{new Date(editedOrder.created_at).toLocaleString()}</Typography>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <Typography variant="subtitle2" color="text.secondary">Status</Typography>
+                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                  <Select
+                    value={editedOrder.status || 'pending'}
+                    onChange={(e) => setEditedOrder({...editedOrder, status: e.target.value})}
+                  >
+                    <MenuItem value="pending">Pending</MenuItem>
+                    <MenuItem value="in-progress">In Progress</MenuItem>
+                    <MenuItem value="completed">Completed</MenuItem>
+                    <MenuItem value="paid">Paid</MenuItem>
+                    <MenuItem value="cancelled">Cancelled</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+            
+            <Typography variant="h6" gutterBottom>Order Items</Typography>
+            
+            <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Item</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell align="center">Quantity</TableCell>
+                    <TableCell align="right">Price</TableCell>
+                    <TableCell align="right">Subtotal</TableCell>
+                    <TableCell align="center">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {editedOrder.items && editedOrder.items.length > 0 ? (
+                    editedOrder.items.map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell>{item.name}</TableCell>
+                      <TableCell>
+                        <Chip
+                            label={item.item_type || 'food'} 
+                          size="small"
+                            color={item.item_type === 'food' ? 'secondary' : 'primary'}
+                        />
+                      </TableCell>
+                      <TableCell align="center">
+                          <TextField
+                            type="number"
+                          size="small"
+                            value={item.quantity}
+                            onChange={(e) => handleUpdateItem(item.id, 'quantity', parseInt(e.target.value) || 1)}
+                            InputProps={{ inputProps: { min: 1 } }}
+                            sx={{ width: '60px' }}
+                        />
+                      </TableCell>
+                        <TableCell align="right">{formatCurrency(item.price)}</TableCell>
+                        <TableCell align="right">{formatCurrency(item.price * item.quantity)}</TableCell>
+                        <TableCell align="center">
+                          <IconButton 
+                            size="small" 
+                            color="error"
+                            onClick={() => handleRemoveItem(item.id)}
+                          >
+                            <RemoveCircleIcon fontSize="small" />
+                          </IconButton>
+                      </TableCell>
+                    </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} align="center">
+                        <Typography>No items in this order</Typography>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+              <Typography variant="h6">Order Summary</Typography>
+              <Typography variant="h6">
+                Total: {formatCurrency(
+                  editedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+                )}
+              </Typography>
+            </Box>
+            
+            {editedOrder.items.length !== currentOrder?.items?.length && (
+              <Alert severity="warning" sx={{ mb: 2 }}>
+                You have removed items from this order. This action cannot be undone once saved.
+              </Alert>
+            )}
+          </Box>
+        ) : (
+          <Box sx={{ py: 4, textAlign: 'center' }}>
+            <CircularProgress />
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions>
+              <Button
+          onClick={() => setEditDialogOpen(false)} 
+          startIcon={<CancelIcon />}
+        >
+          Cancel
+        </Button>
+        <Button 
+          onClick={handleSaveOrder} 
+          variant="contained" 
+                color="primary"
+          startIcon={<SaveIcon />}
+          disabled={!editedOrder}
+              >
+          Save Changes
+              </Button>
+      </DialogActions>
+    </Dialog>
+  );
+
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
+      <Box display="flex" justifyContent="center" alignItems="center" height="80vh">
         <CircularProgress />
-      </Box>
+            </Box>
     );
   }
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4" fontWeight="bold" color="text.primary">
-          Dashboard Overview
-        </Typography>
-        <Button
-          startIcon={<RefreshIcon />}
-          variant="outlined"
-          onClick={handleRefresh}
-          disabled={refreshing}
+      <Typography variant="h4" gutterBottom>
+        Admin Dashboard
+      </Typography>
+
+      <Tabs value={activeTab} onChange={handleTabChange} sx={{ mb: 3 }}>
+        <Tab label="Orders" />
+        <Tab label="Sales" />
+      </Tabs>
+
+      {activeTab === 0 && renderOrdersTab()}
+      {activeTab === 1 && renderSalesTab()}
+      
+      {renderOrderEditDialog()}
+      
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity} 
+          variant="filled"
         >
-          {refreshing ? 'Refreshing...' : 'Refresh Data'}
-        </Button>
-      </Box>
-
-      {/* Stats Cards */}
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Card elevation={0} sx={{ 
-            height: '100%',
-            background: `linear-gradient(135deg, ${theme.palette.primary.light}15 0%, ${theme.palette.primary.main}15 100%)`,
-            border: `1px solid ${theme.palette.primary.light}30`,
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -15,
-                right: -15,
-                backgroundColor: `${theme.palette.primary.main}20`,
-                borderRadius: '50%',
-                width: 100,
-                height: 100,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <MoneyIcon sx={{ fontSize: 40, color: theme.palette.primary.main, opacity: 0.5 }} />
-            </Box>
-            <CardContent>
-              <Typography color="primary.main" variant="overline">
-                Total Sales
-              </Typography>
-              <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {formatCurrency(data.totalSales)}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
-                <TrendingUpIcon fontSize="small" color="success" sx={{ mr: 0.5 }} />
-                +15% from last week
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card elevation={0} sx={{ 
-            height: '100%',
-            background: `linear-gradient(135deg, ${theme.palette.secondary.light}15 0%, ${theme.palette.secondary.main}15 100%)`,
-            border: `1px solid ${theme.palette.secondary.light}30`,
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -15,
-                right: -15,
-                backgroundColor: `${theme.palette.secondary.main}20`,
-                borderRadius: '50%',
-                width: 100,
-                height: 100,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <CartIcon sx={{ fontSize: 40, color: theme.palette.secondary.main, opacity: 0.5 }} />
-            </Box>
-            <CardContent>
-              <Typography color="secondary.main" variant="overline">
-                Total Orders
-              </Typography>
-              <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {data.totalOrders}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
-                <TrendingUpIcon fontSize="small" color="success" sx={{ mr: 0.5 }} />
-                +8% from last week
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card elevation={0} sx={{ 
-            height: '100%',
-            background: `linear-gradient(135deg, ${theme.palette.success.light}15 0%, ${theme.palette.success.main}15 100%)`,
-            border: `1px solid ${theme.palette.success.light}30`,
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -15,
-                right: -15,
-                backgroundColor: `${theme.palette.success.main}20`,
-                borderRadius: '50%',
-                width: 100,
-                height: 100,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <RestaurantIcon sx={{ fontSize: 40, color: theme.palette.success.main, opacity: 0.5 }} />
-            </Box>
-            <CardContent>
-              <Typography color="success.main" variant="overline">
-                Items Sold
-              </Typography>
-              <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {data.totalItems}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
-                <TrendingUpIcon fontSize="small" color="success" sx={{ mr: 0.5 }} />
-                +12% from last week
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card elevation={0} sx={{ 
-            height: '100%',
-            background: `linear-gradient(135deg, ${theme.palette.info.light}15 0%, ${theme.palette.info.main}15 100%)`,
-            border: `1px solid ${theme.palette.info.light}30`,
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -15,
-                right: -15,
-                backgroundColor: `${theme.palette.info.main}20`,
-                borderRadius: '50%',
-                width: 100,
-                height: 100,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <PersonIcon sx={{ fontSize: 40, color: theme.palette.info.main, opacity: 0.5 }} />
-            </Box>
-            <CardContent>
-              <Typography color="info.main" variant="overline">
-                Active Staff
-              </Typography>
-              <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {data.activeStaff.filter(staff => staff.status === 'Active').length}/{data.totalStaff}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {Math.round((data.activeStaff.filter(staff => staff.status === 'Active').length / data.totalStaff) * 100)}% attendance rate
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Charts & Tables */}
-      <Grid container spacing={3}>
-        {/* Sales Chart */}
-        <Grid item xs={12} lg={8}>
-          <Card elevation={0} sx={{ height: '100%' }}>
-            <CardHeader
-              title="Sales Overview"
-              subheader="Last 7 days performance"
-              action={
-                <IconButton aria-label="settings">
-                  <MoreVertIcon />
-                </IconButton>
-              }
-            />
-            <Divider />
-            <CardContent>
-              <Box sx={{ height: 300, mt: 2 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={data.salesData}
-                    margin={{
-                      top: 5,
-                      right: 30,
-                      left: 20,
-                      bottom: 5,
-                    }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="day" />
-                    <YAxis yAxisId="left" orientation="left" stroke={theme.palette.primary.main} />
-                    <YAxis yAxisId="right" orientation="right" stroke={theme.palette.secondary.main} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        borderRadius: 8, 
-                        boxShadow: '0 4px 20px 0 rgba(0,0,0,0.14), 0 7px 10px -5px rgba(0,0,0,0.1)',
-                        border: 'none'
-                      }} 
-                    />
-                    <Legend />
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="sales"
-                      name="Sales ($)"
-                      stroke={theme.palette.primary.main}
-                      strokeWidth={3}
-                      dot={{ r: 4, strokeWidth: 2 }}
-                      activeDot={{ r: 6, strokeWidth: 0 }}
-                    />
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey="orders"
-                      name="Orders"
-                      stroke={theme.palette.secondary.main}
-                      strokeWidth={3}
-                      dot={{ r: 4, strokeWidth: 2 }}
-                      activeDot={{ r: 6, strokeWidth: 0 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Category Distribution */}
-        <Grid item xs={12} md={6} lg={4}>
-          <Card elevation={0} sx={{ height: '100%' }}>
-            <CardHeader
-              title="Sales by Category"
-              subheader="Distribution of items sold"
-              action={
-                <IconButton aria-label="settings">
-                  <MoreVertIcon />
-                </IconButton>
-              }
-            />
-            <Divider />
-            <CardContent>
-              <Box sx={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={data.categoryData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      outerRadius={80}
-                      innerRadius={40}
-                      paddingAngle={5}
-                      dataKey="value"
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    >
-                      {data.categoryData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      formatter={(value, name) => [`${value} items`, name]}
-                      contentStyle={{ 
-                        borderRadius: 8, 
-                        boxShadow: '0 4px 20px 0 rgba(0,0,0,0.14), 0 7px 10px -5px rgba(0,0,0,0.1)',
-                        border: 'none'
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Recent Orders Table */}
-        <Grid item xs={12} md={6}>
-          <Card elevation={0} sx={{ height: '100%' }}>
-            <CardHeader
-              title="Recent Orders"
-              subheader="Latest customer orders"
-              action={
-                <IconButton aria-label="settings">
-                  <MoreVertIcon />
-                </IconButton>
-              }
-            />
-            <Divider />
-            <TableContainer sx={{ maxHeight: 350 }}>
-              <Table stickyHeader>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Order ID</TableCell>
-                    <TableCell>Table</TableCell>
-                    <TableCell align="right">Amount</TableCell>
-                    <TableCell align="center">Status</TableCell>
-                    <TableCell align="right">Time</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {data.recentOrders.map((order) => (
-                    <TableRow key={order.id} hover>
-                      <TableCell component="th" scope="row">
-                        <Typography variant="body2" fontWeight="medium">
-                          {order.id}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {order.items} items
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Chip 
-                          size="small" 
-                          label={`Table ${order.table}`} 
-                          color="primary" 
-                          variant="outlined" 
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        <Typography variant="body2" fontWeight="medium">
-                          ${order.amount}
-                        </Typography>
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip
-                          size="small"
-                          label={order.status}
-                          color={getStatusColor(order.status)}
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={0.5}>
-                          <TimerIcon fontSize="small" color="action" />
-                          <Typography variant="caption" color="text.secondary">
-                            {order.time}
-                          </Typography>
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-            <Divider />
-            <Box sx={{ p: 1.5 }} display="flex" justifyContent="center">
-              <Button
-                size="small"
-                color="primary"
-              >
-                View All Orders
-              </Button>
-            </Box>
-          </Card>
-        </Grid>
-
-        {/* Active Staff */}
-        <Grid item xs={12} md={6}>
-          <Card elevation={0} sx={{ height: '100%' }}>
-            <CardHeader
-              title="Active Staff"
-              subheader="Currently working staff members"
-              action={
-                <IconButton aria-label="settings">
-                  <MoreVertIcon />
-                </IconButton>
-              }
-            />
-            <Divider />
-            <TableContainer sx={{ maxHeight: 350 }}>
-              <Table stickyHeader>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Staff</TableCell>
-                    <TableCell>Role</TableCell>
-                    <TableCell align="center">Status</TableCell>
-                    <TableCell align="right">Orders</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {data.activeStaff.map((staff) => (
-                    <TableRow key={staff.id} hover>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                          <Avatar
-                            sx={{
-                              width: 32,
-                              height: 32,
-                              backgroundColor: 
-                                staff.role === 'Waiter' ? theme.palette.roles?.waiter : 
-                                staff.role === 'Cashier' ? theme.palette.roles?.cashier : 
-                                staff.role === 'Kitchen' ? theme.palette.roles?.kitchen : 
-                                theme.palette.roles?.bartender,
-                              mr: 1.5
-                            }}
-                          >
-                            {staff.name.charAt(0)}
-                          </Avatar>
-                          <Typography variant="body2" fontWeight="medium">
-                            {staff.name}
-                          </Typography>
-                        </Box>
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          size="small"
-                          label={staff.role}
-                          sx={{
-                            backgroundColor: 
-                              staff.role === 'Waiter' ? theme.palette.roles?.waiter + '20' : 
-                              staff.role === 'Cashier' ? theme.palette.roles?.cashier + '20' : 
-                              staff.role === 'Kitchen' ? theme.palette.roles?.kitchen + '20' : 
-                              theme.palette.roles?.bartender + '20',
-                            color: 
-                              staff.role === 'Waiter' ? theme.palette.roles?.waiter : 
-                              staff.role === 'Cashier' ? theme.palette.roles?.cashier : 
-                              staff.role === 'Kitchen' ? theme.palette.roles?.kitchen : 
-                              theme.palette.roles?.bartender,
-                            fontWeight: 'medium'
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip
-                          size="small"
-                          label={staff.status}
-                          color={getStatusColor(staff.status)}
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                          <Typography variant="body2" fontWeight="medium" sx={{ mr: 1 }}>
-                            {staff.orders}
-                          </Typography>
-                          <LinearProgress
-                            variant="determinate"
-                            value={(staff.orders / 15) * 100}
-                            sx={{
-                              width: 50,
-                              height: 6,
-                              borderRadius: 3,
-                              bgcolor: theme.palette.grey[200],
-                              '& .MuiLinearProgress-bar': {
-                                borderRadius: 3,
-                              },
-                            }}
-                          />
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-            <Divider />
-            <Box sx={{ p: 1.5 }} display="flex" justifyContent="center">
-              <Button
-                size="small"
-                color="primary"
-              >
-                Manage Staff
-              </Button>
-            </Box>
-          </Card>
-        </Grid>
-      </Grid>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 } 

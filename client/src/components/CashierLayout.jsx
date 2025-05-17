@@ -63,6 +63,7 @@ export default function CashierLayout() {
     if (path.includes('/dashboard')) return 'Cashier Dashboard';
     if (path.includes('/order')) return 'Order Entry';
     if (path.includes('/receipt')) return 'Receipt';
+    if (path.includes('/sales')) return 'Sales Report';
     return 'Cashier Portal';
   };
 
@@ -78,6 +79,12 @@ export default function CashierLayout() {
       icon: <OrderIcon />, 
       path: '/cashier/order',
       description: 'Create and process new customer orders'
+    },
+    { 
+      text: 'Sales', 
+      icon: <ReceiptIcon />, 
+      path: '/cashier/sales',
+      description: 'View daily sales reports by waiter'
     }
   ];
 

@@ -64,41 +64,21 @@ import {
   AccessTime as AccessTimeIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
-
-// Mock data for demonstration - would be replaced with real API calls
-const generateMockData = () => {
-  // Mock orders
-  const statusOptions = ['Completed', 'In Progress', 'Pending'];
-  const tableOptions = Array.from({ length: 10 }, (_, i) => i + 1);
-  
-  const recentOrders = Array.from({ length: 8 }, (_, i) => ({
-    id: `ORD-${Math.floor(1000 + Math.random() * 9000)}`,
-    table: tableOptions[Math.floor(Math.random() * tableOptions.length)],
-    items: Math.floor(Math.random() * 10) + 1,
-    amount: Math.floor(Math.random() * 200) + 20,
-    status: statusOptions[Math.floor(Math.random() * statusOptions.length)],
-    time: `${Math.floor(Math.random() * 50) + 10} min ago`,
-    waiter: `Waiter ${Math.floor(Math.random() * 5) + 1}`,
-  }));
-  
-  // Daily stats
-  const salesSummary = {
-    todaySales: Math.floor(Math.random() * 3000) + 500,
-    todayOrders: Math.floor(Math.random() * 50) + 10,
-    pendingOrders: recentOrders.filter(order => order.status === 'Pending').length,
-    avgOrderValue: Math.floor(Math.random() * 50) + 30,
-  };
-  
-  return {
-    recentOrders,
-    salesSummary,
-  };
-};
+import * as offlineService from '../../services/offlineService';
 
 export default function CashierDashboard() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState(generateMockData());
+  const [data, setData] = useState({
+    totalSales: 0,
+    pendingOrders: 0,
+    completedOrders: 0,
+    dailyRevenue: 0,
+    salesByCategory: {
+      food: 0,
+      drinks: 0
+    }
+  });
   const [refreshing, setRefreshing] = useState(false);
   const theme = useTheme();
   const user = useSelector((state) => state.auth.user);
@@ -115,29 +95,96 @@ export default function CashierDashboard() {
   const [notificationCount, setNotificationCount] = useState(0);
   const [notificationAnchorEl, setNotificationAnchorEl] = useState(null);
 
+  // Add offline state
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [syncStatus, setSyncStatus] = useState({ syncing: false, message: '' });
+
+  // Setup online/offline listeners
   useEffect(() => {
-    // Fetch real orders from the API
-    const fetchOrders = async () => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      setSyncStatus({ syncing: true, message: 'Reconnected! Syncing data...' });
+      syncOfflineData();
+    };
+    
+    const handleOffline = () => {
+      setIsOffline(true);
+      setSyncStatus({ syncing: false, message: 'Working offline. Changes will sync when reconnected.' });
+    };
+    
+    const cleanup = offlineService.initOfflineListeners(handleOnline, handleOffline);
+    
+    return cleanup;
+  }, [token]);
+
+  // Function to sync offline data
+  const syncOfflineData = async () => {
+    if (navigator.onLine) {
+      try {
+        const result = await offlineService.syncWithServer(axios);
+        setSyncStatus({ 
+          syncing: false, 
+          message: result.success ? 
+            `Sync complete: ${result.message}` : 
+            `Sync failed: ${result.message}`
+        });
+        
+        // Refresh dashboard data after sync
+        handleRefresh();
+        
+        setSnackbar({
+          open: true,
+          message: result.success ? 'Offline data synced successfully' : 'Failed to sync some offline data',
+          severity: result.success ? 'success' : 'warning'
+        });
+      } catch (error) {
+        console.error('Error syncing offline data:', error);
+        setSyncStatus({ 
+          syncing: false, 
+          message: `Sync error: ${error.message}`
+        });
+        
+        setSnackbar({
+          open: true,
+          message: 'Error syncing offline data',
+          severity: 'error'
+        });
+      }
+    }
+  };
+
+  // Modify fetchDashboardData to handle offline mode
+  const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        const response = await axios.get('http://localhost:5001/api/orders', {
+      
+      if (navigator.onLine) {
+        const response = await axios.get('http://localhost:5001/api/dashboard/cashier', {
           headers: {
             Authorization: `Bearer ${token}`
           }
         });
-        setOrders(response.data);
-        // Also update the data object with fresh mock data
-        setData(generateMockData());
+        setData(response.data);
+      } else {
+        // Use offline data when not connected
+        const offlineData = offlineService.getOfflineDashboardData();
+        setData(offlineData);
+      }
+      
         setLoading(false);
       } catch (error) {
-        console.error('Error fetching orders:', error);
-        // Fallback to mock data if API fails
-        setData(generateMockData());
+      console.error('Error fetching dashboard data:', error);
+      
+      // Fallback to offline data on error
+      const offlineData = offlineService.getOfflineDashboardData();
+      setData(offlineData);
+      
         setLoading(false);
       }
     };
 
-    fetchOrders();
+  useEffect(() => {
+    fetchDashboardData();
   }, [token, refreshing]);
 
   // Socket.IO connection for real-time updates
@@ -230,9 +277,42 @@ export default function CashierDashboard() {
     fetchBillRequests();
   }, [token]);
 
+  // Add fetchOrders function if it doesn't exist, or update it
+  useEffect(() => {
+    const fetchOrders = async () => {
+      try {
+        console.log('Fetching orders for cashier dashboard...');
+        const response = await axios.get('http://localhost:5001/api/orders', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        console.log('Fetched orders:', response.data);
+        setOrders(response.data);
+      } catch (error) {
+        console.error('Error fetching orders:', error);
+      }
+    };
+
+    fetchOrders();
+    // This effect should run after auth token is available and when dashboard is refreshed
+  }, [token, refreshing]);
+
+  // Update the handleRefresh function to also refresh orders
   const handleRefresh = () => {
     setRefreshing(true);
-    setData(generateMockData());
+    setData({
+      totalSales: 0,
+      pendingOrders: 0,
+      completedOrders: 0,
+      dailyRevenue: 0,
+      salesByCategory: {
+        food: 0,
+        drinks: 0
+      }
+    });
+    
+    // This will trigger both the dashboard data fetch and orders fetch
     setTimeout(() => {
       setRefreshing(false);
     }, 1000);
@@ -316,9 +396,24 @@ export default function CashierDashboard() {
     }
   };
 
-  const handleGenerateReceipt = (order) => {
-    // Redirect to receipt page instead of showing alert
+  const handleGenerateReceipt = async (order) => {
+    try {
+      // Instead of showing an alert, navigate to the receipt page
     navigate(`/cashier/receipt/${order.id}`);
+      
+      setSnackbar({
+        open: true,
+        message: `Navigating to receipt for order #${order.id}`,
+        severity: 'success'
+      });
+    } catch (error) {
+      console.error('Error navigating to receipt:', error);
+      setSnackbar({
+        open: true,
+        message: 'Error loading receipt',
+        severity: 'error'
+      });
+    }
   };
 
   const handleCloseSnackbar = () => {
@@ -388,8 +483,23 @@ export default function CashierDashboard() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" fontWeight="bold" color={theme.palette.roles.cashier}>
           Cashier Dashboard
+          {isOffline && (
+            <Chip
+              label="Offline Mode"
+              color="warning"
+              size="small"
+              sx={{ ml: 2, verticalAlign: 'middle' }}
+            />
+          )}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {/* Offline sync status */}
+          {syncStatus.message && (
+            <Typography variant="body2" color={isOffline ? "warning.main" : "success.main"} sx={{ mr: 2 }}>
+              {syncStatus.message}
+            </Typography>
+          )}
+          
           {/* Notification Bell */}
           <Tooltip title="Bill Requests">
             <IconButton 
@@ -570,7 +680,7 @@ export default function CashierDashboard() {
                 Today's Sales
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {formatCurrency(data?.salesSummary?.todaySales || 0)}
+                {formatCurrency(data?.dailyRevenue || 0)}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
                 <TrendingUpIcon fontSize="small" color="success" sx={{ mr: 0.5 }} />
@@ -609,7 +719,7 @@ export default function CashierDashboard() {
                 Today's Orders
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {data?.salesSummary?.todayOrders || 0}
+                {data?.completedOrders || 0}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
                 Orders processed today
@@ -647,7 +757,7 @@ export default function CashierDashboard() {
                 Pending Orders
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {data?.salesSummary?.pendingOrders || 0}
+                {data?.pendingOrders || 0}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center' }}>
                 Orders waiting to be processed
@@ -685,7 +795,7 @@ export default function CashierDashboard() {
                 Avg. Order Value
               </Typography>
               <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {formatCurrency(data?.salesSummary?.avgOrderValue || 0)}
+                {formatCurrency(data?.dailyRevenue / data?.completedOrders || 0)}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 Average amount per order
@@ -714,7 +824,7 @@ export default function CashierDashboard() {
                   }}
                   disabled={orders.length === 0}
                 >
-                  Print Latest
+                  View Latest
                 </Button>
                 <IconButton onClick={handleRefresh} disabled={refreshing}>
                   <RefreshIcon />
@@ -768,7 +878,7 @@ export default function CashierDashboard() {
                               <EditIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                          <Tooltip title="Print Receipt">
+                          <Tooltip title="View Receipt">
                             <IconButton 
                               size="small" 
                               color="secondary"

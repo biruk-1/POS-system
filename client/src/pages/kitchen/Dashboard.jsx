@@ -68,8 +68,8 @@ const generateMockOrders = () => {
         const name = foodItems[Math.floor(Math.random() * foodItems.length)];
         return {
           name: name,
-          quantity: Math.floor(Math.random() * 3) + 1,
-          notes: Math.random() > 0.7 ? 'No onions' : '',
+        quantity: Math.floor(Math.random() * 3) + 1,
+        notes: Math.random() > 0.7 ? 'No onions' : '',
           ready: Math.random() > 0.6,
           // Add image property
           image: FOOD_IMAGES[name] || FOOD_IMAGES.default
@@ -344,7 +344,7 @@ export default function KitchenDashboard() {
                 </Badge>
                 <Typography variant="h6" sx={{ fontWeight: 'bold', color: activeTab === 3 ? 'white' : theme.palette.success.main }}>
                   Ready
-                </Typography>
+        </Typography>
               </Box>
             </Button>
           </Grid>
@@ -440,7 +440,7 @@ export default function KitchenDashboard() {
                 <Divider />
                 <CardContent sx={{ flexGrow: 1, pt: 2 }}>
                   <Grid container spacing={2}>
-                    {order.items.map((item, idx) => (
+                        {order.items.map((item, idx) => (
                       <Grid item xs={12} key={idx}>
                         <Card variant="outlined" sx={{ mb: 1, borderRadius: 1 }}>
                           <Grid container>
@@ -500,17 +500,17 @@ export default function KitchenDashboard() {
                 <Box sx={{ p: 2, bgcolor: '#f9f9f9' }}>
                   <Grid container spacing={2} alignItems="center">
                     <Grid item xs={5}>
-                      <Chip
-                        label={order.status}
-                        color={
-                          order.status === 'New' ? 'error' :
-                          order.status === 'In Progress' ? 'warning' :
-                          order.status === 'Ready' ? 'success' :
-                          'default'
-                        }
+                    <Chip
+                      label={order.status}
+                      color={
+                        order.status === 'New' ? 'error' :
+                        order.status === 'In Progress' ? 'warning' :
+                        order.status === 'Ready' ? 'success' :
+                        'default'
+                      }
                         size="large"
                         sx={{ fontWeight: 'bold', fontSize: 16, width: '100%', height: 40 }}
-                      />
+                    />
                     </Grid>
                     <Grid item xs={7}>
                       {order.status === 'New' && (
@@ -566,7 +566,7 @@ export default function KitchenDashboard() {
                       )}
                     </Grid>
                   </Grid>
-                </Box>
+                    </Box>
               </Card>
             </Grid>
           ))}

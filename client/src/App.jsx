@@ -7,6 +7,10 @@ import { useSelector } from 'react-redux';
 import Login from './pages/Login';
 import PinLogin from './pages/PinLogin';
 
+// Waiter Menu Pages (no auth required)
+import WaiterMenu from './pages/WaiterMenu';
+import WaiterOrderConfirmation from './pages/WaiterOrderConfirmation';
+
 // Layout Components
 import AdminLayout from './components/AdminLayout';
 import CashierLayout from './components/CashierLayout';
@@ -27,6 +31,8 @@ import AdminSettings from './pages/admin/Settings';
 import CashierDashboard from './pages/cashier/Dashboard';
 import OrderEntry from './pages/cashier/OrderEntry';
 import Receipt from './pages/cashier/Receipt';
+import OrderTicket from './pages/cashier/OrderTicket';
+import CashierSales from './pages/cashier/Sales';
 
 // Waiter Pages
 import WaiterDashboard from './pages/waiter/Dashboard';
@@ -34,9 +40,11 @@ import TableManagement from './pages/waiter/TableManagement';
 
 // Kitchen Pages
 import KitchenDashboard from './pages/kitchen/Dashboard';
+import KitchenView from './pages/kitchen/KitchenView';
 
 // Bartender Pages
 import BartenderDashboard from './pages/bartender/Dashboard';
+import BartenderView from './pages/bartender/BartenderView';
 
 // Enhanced theme configuration
 const theme = createTheme({
@@ -185,9 +193,9 @@ function App() {
         case 'waiter':
           return <Navigate to="/waiter/dashboard" />;
         case 'kitchen':
-          return <Navigate to="/kitchen/dashboard" />;
+          return <Navigate to="/kitchen" />;
         case 'bartender':
-          return <Navigate to="/bartender/dashboard" />;
+          return <Navigate to="/bartender" />;
         default:
           return <Navigate to="/login" />;
       }
@@ -206,7 +214,15 @@ function App() {
           <Route path="/pin-login" element={!token ? <PinLogin /> : <Navigate to="/" />} />
           
           {/* Root Redirect */}
-          <Route path="/" element={<Navigate to={token ? `/${user?.role}/dashboard` : "/login"} />} />
+          <Route path="/" element={<Navigate to={token ? 
+            (user?.role === 'kitchen' ? "/kitchen" : 
+             user?.role === 'bartender' ? "/bartender" : 
+             `/${user?.role}/dashboard`) 
+            : "/login"} />} />
+          
+          {/* Waiter Menu Routes (No Auth Required) */}
+          <Route path="/waiter-menu" element={<WaiterMenu />} />
+          <Route path="/waiter-order-confirmation" element={<WaiterOrderConfirmation />} />
           
           {/* Admin Routes */}
           <Route path="/admin" element={
@@ -230,6 +246,8 @@ function App() {
             <Route path="dashboard" element={<CashierDashboard />} />
             <Route path="order" element={<OrderEntry />} />
             <Route path="receipt/:orderId" element={<Receipt />} />
+            <Route path="order-ticket" element={<OrderTicket />} />
+            <Route path="sales" element={<CashierSales />} />
           </Route>
           
           {/* Waiter Routes */}
@@ -248,6 +266,7 @@ function App() {
               <KitchenFullScreenLayout />
             </ProtectedRoute>
           }>
+            <Route index element={<KitchenView />} />
             <Route path="dashboard" element={<KitchenDashboard />} />
           </Route>
           
@@ -257,6 +276,7 @@ function App() {
               <BartenderFullScreenLayout />
             </ProtectedRoute>
           }>
+            <Route index element={<BartenderView />} />
             <Route path="dashboard" element={<BartenderDashboard />} />
           </Route>
           

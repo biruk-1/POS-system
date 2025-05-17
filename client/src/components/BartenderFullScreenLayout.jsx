@@ -36,7 +36,7 @@ export default function BartenderFullScreenLayout() {
         <Toolbar>
           <BarIcon sx={{ mr: 2, fontSize: 28 }} />
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Bartender Dashboard
+            Bartender Orders
           </Typography>
           
           <Box sx={{ display: 'flex', alignItems: 'center' }}>

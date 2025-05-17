@@ -23,7 +23,8 @@ import {
 import {
   Person as PersonIcon,
   Phone as PhoneIcon,
-  VpnKey as PinIcon
+  VpnKey as PinIcon,
+  Restaurant as RestaurantIcon
 } from '@mui/icons-material';
 import { API_ENDPOINTS } from '../config/api';
 
@@ -80,10 +81,10 @@ export default function Login() {
           navigate('/cashier/dashboard');
           break;
         case 'kitchen':
-          navigate('/kitchen/dashboard');
+          navigate('/kitchen');
           break;
         case 'bartender':
-          navigate('/bartender/dashboard');
+          navigate('/bartender');
           break;
         case 'waiter':
           navigate('/waiter/dashboard');
@@ -119,6 +120,10 @@ export default function Login() {
     }
     
     return true;
+  };
+
+  const handleContinueAsWaiter = () => {
+    navigate('/waiter-menu');
   };
   
   return (
@@ -241,10 +246,21 @@ export default function Login() {
                 color="secondary"
                 component={Link}
                 to="/pin-login"
-                sx={{ mt: 1 }}
+                sx={{ mt: 1, mb: 2 }}
                 startIcon={<PinIcon />}
               >
                 Login with Waiter PIN
+              </Button>
+
+              <Button
+                fullWidth
+                variant="contained"
+                color="success"
+                onClick={handleContinueAsWaiter}
+                sx={{ mt: 1 }}
+                startIcon={<RestaurantIcon />}
+              >
+                Continue as Waiter
               </Button>
             </Box>
           </CardContent>

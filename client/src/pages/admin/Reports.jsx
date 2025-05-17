@@ -49,17 +49,9 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
-
-// Mock data for report
-const mockSalesData = [
-  { id: 1, date: '2023-07-01', orders: 42, revenue: 1680.50, avgOrder: 40.01, topItem: 'Chicken Burger' },
-  { id: 2, date: '2023-07-02', orders: 38, revenue: 1520.75, avgOrder: 40.02, topItem: 'Margarita' },
-  { id: 3, date: '2023-07-03', orders: 45, revenue: 1890.25, avgOrder: 42.01, topItem: 'Steak Platter' },
-  { id: 4, date: '2023-07-04', orders: 56, revenue: 2485.50, avgOrder: 44.38, topItem: 'Mojito' },
-  { id: 5, date: '2023-07-05', orders: 32, revenue: 1280.75, avgOrder: 40.02, topItem: 'Fried Calamari' },
-  { id: 6, date: '2023-07-06', orders: 41, revenue: 1845.25, avgOrder: 45.01, topItem: 'Seafood Pasta' },
-  { id: 7, date: '2023-07-07', orders: 58, revenue: 2590.50, avgOrder: 44.66, topItem: 'Chocolate Cake' },
-];
+import { io } from 'socket.io-client';
+// Import socket from utils if available
+// import { socket } from '../../utils/socket';
 
 export default function Reports() {
   const theme = useTheme();
@@ -69,10 +61,37 @@ export default function Reports() {
   const [endDate, setEndDate] = useState(new Date());
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(5);
-  const [reportData, setReportData] = useState(mockSalesData);
+  const [reportData, setReportData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [socket, setSocket] = useState(null);
+
+  // Initialize socket connection
+  useEffect(() => {
+    const newSocket = io('http://localhost:5001');
+    setSocket(newSocket);
+
+    // Clean up the socket connection when the component unmounts
+    return () => {
+      if (newSocket) newSocket.disconnect();
+    };
+  }, []);
+
+  // Set up socket event listeners
+  useEffect(() => {
+    if (!socket) return;
+
+    // Listen for admin_sales_updated event
+    socket.on('admin_sales_updated', (data) => {
+      console.log('Received sales update:', data);
+      generateReport(); // Refresh report data when sales are updated
+    });
+
+    return () => {
+      socket.off('admin_sales_updated');
+    };
+  }, [socket, reportType, dateRange, startDate, endDate]);
 
   // Automatically generate report when reportType or date range changes
   useEffect(() => {
@@ -156,21 +175,82 @@ export default function Reports() {
       console.log('Generating report with parameters:', {
         reportType,
         startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0]
+        endDate: endDate.toISOString().split('T')[0],
+        detailLevel: 'daily' // Always use daily detail level for the most granular data
       });
       
       const response = await axios.post('http://localhost:5001/api/reports/generate', {
         reportType,
         startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0]
+        endDate: endDate.toISOString().split('T')[0],
+        detailLevel: 'daily', // Add detail level parameter for better data
+        _t: new Date().getTime() // Add timestamp to prevent caching issues
       }, {
         headers: { 
           Authorization: `Bearer ${localStorage.getItem('token')}` 
         }
       });
       
-      setReportData(response.data);
+      if (response.data && response.data.data && Array.isArray(response.data.data) && response.data.data.length > 0) {
+        // Use functional update to ensure we're working with the most recent state
+        setReportData(prevData => {
+          console.log('Updating report data with server response');
+          return response.data.data;
+        });
+        setSuccess('Report generated successfully!');
+      } else if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+        // Backward compatibility with previous API response format
+        setReportData(prevData => {
+          console.log('Updating report data with server response (legacy format)');
+          return response.data;
+        });
       setSuccess('Report generated successfully!');
+      } else {
+        // Handle empty data by creating placeholder data for today
+        const today = new Date().toISOString().split('T')[0];
+        
+        let placeholderData = [];
+        
+        if (reportType === 'sales') {
+          placeholderData = [{
+            id: 1,
+            date: today,
+            orders: 0,
+            revenue: 0,
+            avgOrder: 0,
+            topItem: 'N/A'
+          }];
+        } else if (reportType === 'items') {
+          placeholderData = [{
+            id: 1,
+            date: today,
+            count: 0,
+            revenue: 0
+          }];
+        } else if (reportType === 'drinks') {
+          placeholderData = [{
+            id: 1,
+            date: today,
+            count: 0,
+            revenue: 0
+          }];
+        } else if (reportType === 'staff') {
+          placeholderData = [{
+            id: 1,
+            staff: 'No staff data',
+            role: 'N/A',
+            orders: 0, 
+            revenue: 0
+          }];
+        }
+        
+        // Use functional update
+        setReportData(prevData => {
+          console.log('Setting placeholder data due to empty response');
+          return placeholderData;
+        });
+        setSuccess('No data available for the selected period. Showing default values.');
+      }
     } catch (err) {
       console.error('Failed to generate report:', err);
       
@@ -186,8 +266,42 @@ export default function Reports() {
         setError(`Failed to generate report: ${err.message}`);
       }
       
-      // Fallback to mock data if API fails
-      setReportData(mockSalesData);
+      // Create placeholder data on error too
+      const today = new Date().toISOString().split('T')[0];
+        
+      let placeholderData = [];
+      
+      if (reportType === 'sales') {
+        placeholderData = [{
+          id: 1,
+          date: today,
+          orders: 0,
+          revenue: 0,
+          avgOrder: 0,
+          topItem: 'N/A'
+        }];
+      } else if (reportType === 'items' || reportType === 'drinks') {
+        placeholderData = [{
+          id: 1,
+          date: today,
+          count: 0,
+          revenue: 0
+        }];
+      } else if (reportType === 'staff') {
+        placeholderData = [{
+          id: 1,
+          staff: 'No staff data',
+          role: 'N/A',
+          orders: 0, 
+          revenue: 0
+        }];
+      }
+      
+      // Use functional update
+      setReportData(prevData => {
+        console.log('Setting placeholder data due to error');
+        return placeholderData;
+      });
     } finally {
       setLoading(false);
     }
@@ -195,93 +309,148 @@ export default function Reports() {
 
   // Helper functions for calculating report summary values
   const calculateTotalRevenue = () => {
-    if (reportData.length === 0) return 0;
-    return reportData.reduce((total, row) => total + (Number(row.revenue) || 0), 0);
+    // First check if we have a metadata object with totalRevenue
+    if (reportData && reportData.metadata && reportData.metadata.totalRevenue !== undefined) {
+      return reportData.metadata.totalRevenue;
+    }
+    
+    // If not, calculate from data array (handling both new and old formats)
+    const dataArray = Array.isArray(reportData) ? reportData : (reportData.data || []);
+    return dataArray.reduce((sum, item) => sum + parseFloat(item.revenue || 0), 0);
   };
 
   const calculateTotalOrders = () => {
-    if (reportData.length === 0) return 0;
-    
-    if (reportType === 'sales') {
-      return reportData.reduce((total, row) => total + (Number(row.orders) || 0), 0);
-    } else if (reportType === 'items' || reportType === 'drinks') {
-      return reportData.reduce((total, row) => total + (Number(row.count) || 0), 0);
-    } else if (reportType === 'staff') {
-      return reportData.reduce((total, row) => total + (Number(row.orders) || 0), 0);
+    // First check if we have a metadata object with totalOrders
+    if (reportData && reportData.metadata && reportData.metadata.totalOrders !== undefined) {
+      return reportData.metadata.totalOrders;
     }
     
-    return 0;
+    // If not, calculate from data array (handling both new and old formats)
+    const dataArray = Array.isArray(reportData) ? reportData : (reportData.data || []);
+    return dataArray.reduce((sum, item) => {
+      // First check for the right property based on report type
+      if (reportType === 'sales' || reportType === 'staff') {
+        return sum + (parseInt(item.orders) || 0);
+      } else if (reportType === 'items' || reportType === 'drinks') {
+        return sum + (parseInt(item.count) || 0);
+    }
+      return sum;
+    }, 0);
   };
 
   const calculateAverageOrderValue = () => {
-    const totalOrders = calculateTotalOrders();
-    const totalRevenue = calculateTotalRevenue();
+    // If we have metadata, prefer that
+    if (reportData && reportData.metadata && reportData.metadata.totalRevenue !== undefined && 
+        reportData.metadata.totalOrders !== undefined && reportData.metadata.totalOrders > 0) {
+      return reportData.metadata.totalRevenue / reportData.metadata.totalOrders;
+    }
     
-    if (totalOrders === 0) return 0;
-    return totalRevenue / totalOrders;
+    // If not, calculate manually
+    const totalRevenue = calculateTotalRevenue();
+    const totalOrders = calculateTotalOrders();
+    return totalOrders > 0 ? totalRevenue / totalOrders : 0;
   };
 
   const findTopSellingItem = () => {
-    if (reportData.length === 0 || reportType !== 'sales') return 'N/A';
+    const dataArray = Array.isArray(reportData) ? reportData : (reportData.data || []);
     
-    // Find the most frequent topItem
-    const topItems = reportData
-      .filter(row => row.topItem)
-      .map(row => row.topItem);
+    if (dataArray.length === 0) return 'No data';
       
-    if (topItems.length === 0) return 'N/A';
+    // First, try to get top item from the first record's topItem property
+    if (dataArray[0].topItem) return dataArray[0].topItem;
     
+    // If that's not available, calculate it (this is fallback logic)
+    if (reportType === 'sales') {
+      // For sales reports, find the most common topItem across all dates
     const itemCounts = {};
-    topItems.forEach(item => {
-      itemCounts[item] = (itemCounts[item] || 0) + 1;
-    });
+      dataArray.forEach(day => {
+        if (day.topItem && day.topItem !== 'N/A') {
+          itemCounts[day.topItem] = (itemCounts[day.topItem] || 0) + 1;
+        }
+      });
+      
+      if (Object.keys(itemCounts).length === 0) return 'N/A';
+      
+      return Object.entries(itemCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(entry => entry[0])[0];
+    } else if (reportType === 'items' || reportType === 'drinks') {
+      // For item reports, either use the pre-calculated topItem or find the highest revenue item
+      const topRevenueItem = dataArray.sort((a, b) => b.revenue - a.revenue)[0];
+      return topRevenueItem.name || topRevenueItem.topItem || 'N/A';
+    }
     
-    const topItem = Object.keys(itemCounts).reduce((a, b) => 
-      itemCounts[a] > itemCounts[b] ? a : b
-    );
-    
-    return topItem || 'N/A';
+    return 'N/A';
   };
 
   const getReportTitle = () => {
-    switch(reportType) {
-      case 'sales':
-        return 'Sales Data';
-      case 'items':
-        return 'Food Items Report';
-      case 'drinks':
-        return 'Drinks Report';
-      case 'staff':
-        return 'Staff Performance';
+    let title = '';
+    let timeRangeText = '';
+    
+    switch (dateRange) {
+      case 'today':
+        timeRangeText = 'Today';
+        break;
+      case 'week':
+        timeRangeText = 'Last 7 Days';
+        break;
+      case 'month':
+        timeRangeText = 'Last 30 Days';
+        break;
+      case 'year':
+        timeRangeText = 'Last 12 Months';
+        break;
+      case 'custom':
+        timeRangeText = `${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`;
+        break;
       default:
-        return 'Report Data';
+        timeRangeText = 'All Time';
     }
+    
+    switch (reportType) {
+      case 'sales':
+        title = `Sales Report - ${timeRangeText}`;
+        break;
+      case 'items':
+        title = `Food Items Report - ${timeRangeText}`;
+        break;
+      case 'drinks':
+        title = `Beverages Report - ${timeRangeText}`;
+        break;
+      case 'staff':
+        title = `Staff Performance Report - ${timeRangeText}`;
+        break;
+      default:
+        title = `Business Report - ${timeRangeText}`;
+    }
+    
+    return title;
   };
 
   function createSalesChart() {
+    const dataArray = Array.isArray(reportData) ? reportData : (reportData.data || []);
+    if (dataArray.length === 0) return null;
+    
+    // Create a copy of the data for the chart
+    const chartData = [...dataArray].reverse().map(item => ({
+      name: item.date,
+      revenue: parseFloat(item.revenue || 0).toFixed(2),
+      orders: parseInt(item.orders || item.count || 0)
+    }));
+    
+    // Limit to prevent chart overcrowding
+    const limitedChartData = chartData.slice(0, 10);
+    
     return (
       <ResponsiveContainer width="100%" height={300}>
-        <LineChart
-          data={reportData}
-          margin={{ top: 10, right: 30, left: 0, bottom: 10 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="date" />
-          <YAxis 
-            tickFormatter={(value) => `Br ${value}`} 
-          />
-          <RechartsTooltip 
-            formatter={(value) => [`${formatCurrency(value)}`, 'Revenue']} 
-            labelFormatter={(label) => `Date: ${label}`}
-          />
+        <LineChart data={limitedChartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+          <Line type="monotone" dataKey="revenue" stroke={theme.palette.primary.main} name="Revenue" />
+          <Line type="monotone" dataKey="orders" stroke={theme.palette.secondary.main} name="Orders" />
+          <CartesianGrid stroke="#ccc" strokeDasharray="5 5" />
+          <XAxis dataKey="name" />
+          <YAxis />
+          <RechartsTooltip />
           <Legend />
-          <Line
-            type="monotone"
-            dataKey="revenue"
-            name="Revenue"
-            stroke={theme.palette.primary.main}
-            activeDot={{ r: 8 }}
-          />
         </LineChart>
       </ResponsiveContainer>
     );
@@ -470,37 +639,24 @@ export default function Reports() {
             />
             <Divider />
             <CardContent>
-              {reportData.length === 0 ? (
-                <Box sx={{ p: 3, textAlign: 'center' }}>
-                  <Typography color="text.secondary">
-                    No data found for the selected time period
-                  </Typography>
-                </Box>
-              ) : (
-                <>
-                  <TableContainer component={Paper} elevation={0}>
-                    <Table>
-                      <TableHead>
+              <TableContainer component={Paper} sx={{ mt: 2 }}>
+                <Table sx={{ minWidth: 650 }} aria-label="report data table">
+                  <TableHead sx={{ backgroundColor: theme.palette.background.neutral }}>
                         <TableRow>
                           <TableCell>Date</TableCell>
                           {reportType === 'sales' && (
                             <>
                               <TableCell align="right">Orders</TableCell>
                               <TableCell align="right">Revenue</TableCell>
-                              <TableCell align="right">Avg. Order Value</TableCell>
-                              <TableCell>Top Selling Item</TableCell>
+                          <TableCell align="right">Avg. Order</TableCell>
+                          <TableCell>Top Item</TableCell>
                             </>
                           )}
-                          {reportType === 'items' && (
+                      {(reportType === 'items' || reportType === 'drinks') && (
                             <>
-                              <TableCell align="right">Count</TableCell>
+                          <TableCell align="right">Quantity</TableCell>
                               <TableCell align="right">Revenue</TableCell>
-                            </>
-                          )}
-                          {reportType === 'drinks' && (
-                            <>
-                              <TableCell align="right">Count</TableCell>
-                              <TableCell align="right">Revenue</TableCell>
+                          <TableCell>Top Item</TableCell>
                             </>
                           )}
                           {reportType === 'staff' && (
@@ -514,62 +670,61 @@ export default function Reports() {
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {reportData
+                    {(Array.isArray(reportData) ? reportData : (reportData.data || []))
                           .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                           .map((row) => (
-                            <TableRow key={row.id}>
-                              {reportType === 'staff' ? (
-                                <TableCell>{row.staff}</TableCell>
-                              ) : (
-                                <TableCell>{row.date}</TableCell>
-                              )}
+                        <TableRow key={row.id} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
+                          <TableCell component="th" scope="row">
+                            {row.date}
+                          </TableCell>
                               
                               {reportType === 'sales' && (
                                 <>
-                                  <TableCell align="right">{row.orders || 0}</TableCell>
-                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
-                                  <TableCell align="right">${(row.avgOrder || 0).toFixed(2)}</TableCell>
+                              <TableCell align="right">{row.orders}</TableCell>
+                              <TableCell align="right">{formatCurrency(row.revenue)}</TableCell>
+                              <TableCell align="right">{formatCurrency(row.avgOrder)}</TableCell>
                                   <TableCell>{row.topItem || 'N/A'}</TableCell>
                                 </>
                               )}
                               
-                              {reportType === 'items' && (
+                          {(reportType === 'items' || reportType === 'drinks') && (
                                 <>
-                                  <TableCell align="right">{row.count || 0}</TableCell>
-                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
-                                </>
-                              )}
-                              
-                              {reportType === 'drinks' && (
-                                <>
-                                  <TableCell align="right">{row.count || 0}</TableCell>
-                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                              <TableCell align="right">{row.count}</TableCell>
+                              <TableCell align="right">{formatCurrency(row.revenue)}</TableCell>
+                              <TableCell>{row.topItem || 'N/A'}</TableCell>
                                 </>
                               )}
                               
                               {reportType === 'staff' && (
                                 <>
-                                  <TableCell>{row.role || 'N/A'}</TableCell>
-                                  <TableCell align="right">{row.orders || 0}</TableCell>
-                                  <TableCell align="right">${(row.revenue || 0).toFixed(2)}</TableCell>
+                              <TableCell>{row.staff}</TableCell>
+                              <TableCell>{row.role}</TableCell>
+                              <TableCell align="right">{row.orders}</TableCell>
+                              <TableCell align="right">{formatCurrency(row.revenue)}</TableCell>
                                 </>
                               )}
                             </TableRow>
                           ))}
+                    
+                    {(Array.isArray(reportData) ? reportData : (reportData.data || [])).length === 0 && (
+                      <TableRow style={{ height: 53 }}>
+                        <TableCell colSpan={reportType === 'sales' ? 5 : (reportType === 'staff' ? 4 : 3)} align="center">
+                          No data available for the selected period
+                        </TableCell>
+                      </TableRow>
+                    )}
                       </TableBody>
                     </Table>
-                  </TableContainer>
                   <TablePagination
                     rowsPerPageOptions={[5, 10, 25]}
                     component="div"
-                    count={reportData.length}
+                  count={(Array.isArray(reportData) ? reportData : (reportData.data || [])).length}
                     rowsPerPage={rowsPerPage}
                     page={page}
                     onPageChange={handleChangePage}
                     onRowsPerPageChange={handleChangeRowsPerPage}
                   />
-                </>
-              )}
+              </TableContainer>
             </CardContent>
           </Card>
         </Grid>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
 import io from 'socket.io-client';
+import * as offlineService from '../../services/offlineService';
 import {
   Typography,
   Grid,
@@ -34,6 +35,7 @@ import {
   Print as PrintIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
+import { useNavigate } from 'react-router-dom';
 
 export default function OrderEntry() {
   const user = useSelector((state) => state.auth.user);
@@ -44,10 +46,15 @@ export default function OrderEntry() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [tableNumber, setTableNumber] = useState('');
   const [waiterId, setWaiterId] = useState('');
   const [waiters, setWaiters] = useState([]);
   const [activeTab, setActiveTab] = useState('all');
+  
+  // Add offline state
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [syncStatus, setSyncStatus] = useState('');
+  
+  const navigate = useNavigate();
   
   // Fetch items on component mount
   useEffect(() => {
@@ -72,17 +79,23 @@ export default function OrderEntry() {
     const fetchWaiters = async () => {
       if (user?.role === 'cashier') {
         try {
-          const response = await axios.get('http://localhost:5001/api/users', {
+          console.log('Fetching waiters list...');
+          const response = await axios.get('http://localhost:5001/api/waiters', {
             headers: {
               Authorization: `Bearer ${token}`
             }
           });
           
-          // Filter only waiters
-          const waitersList = response.data.filter(user => user.role === 'waiter');
-          setWaiters(waitersList);
+          console.log('Fetched waiters:', response.data);
+          setWaiters(response.data);
+          
+          // Set default waiter if available
+          if (response.data.length > 0) {
+            setWaiterId(response.data[0].id);
+          }
         } catch (err) {
           console.error('Failed to load waiters', err);
+          setError('Failed to load waiters. Please refresh and try again.');
         }
       }
     };
@@ -118,6 +131,23 @@ export default function OrderEntry() {
       socket.disconnect();
     };
   }, [token, user]);
+  
+  // Setup online/offline listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      setSyncStatus('Connected');
+    };
+    
+    const handleOffline = () => {
+      setIsOffline(true);
+      setSyncStatus('Working offline. Orders will sync when reconnected.');
+    };
+    
+    const cleanup = offlineService.initOfflineListeners(handleOnline, handleOffline);
+    
+    return cleanup;
+  }, []);
   
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -159,19 +189,15 @@ export default function OrderEntry() {
     return cart.reduce((total, item) => total + (item.price * item.quantity), 0).toFixed(2);
   };
   
+  // Update the handlePlaceOrder function
   const handlePlaceOrder = async () => {
     if (cart.length === 0) {
       setError('Cart is empty. Please add items to your order.');
       return;
     }
     
-    if (!tableNumber) {
-      setError('Please enter a table number');
-      return;
-    }
-    
-    if (user?.role === 'cashier' && !waiterId) {
-      setError('Please select a waiter or enter waiter ID');
+    if (!waiterId) {
+      setError('Please select a waiter');
       return;
     }
     
@@ -183,34 +209,155 @@ export default function OrderEntry() {
           price: item.price,
           item_type: item.item_type
         })),
-        table_number: tableNumber,
         total_amount: parseFloat(calculateTotal()),
-        waiter_id: user.role === 'waiter' ? null : waiterId
+        waiter_id: waiterId
       };
       
+      console.log('Placing order with data:', orderData);
+      
+      let orderId;
+      
+      if (navigator.onLine) {
+        // Online mode - send to server
       const response = await axios.post('http://localhost:5001/api/orders', orderData, {
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
       
-      setSuccess('Order placed successfully!');
-      setCart([]);
-      setTableNumber('');
+        console.log('Order created:', response.data);
+        orderId = response.data.id;
+      } else {
+        // Offline mode - save locally
+        const offlineOrder = offlineService.saveOrderOffline(orderData);
+        orderId = offlineOrder.id;
+      }
       
-      // Automatically print receipt in a real-world scenario
-      // For now we just show a message
-      console.log('Order placed:', response.data);
+      // Generate and print receipts
+      await handlePrintReceipts(orderId);
+      
+      setSuccess(isOffline ? 
+        'Order saved in offline mode. It will sync when back online.' : 
+        'Order placed successfully!');
+      
+      // Clear the cart and reset fields
+      setCart([]);
+      
+      // Keep the same waiter selected for convenience
+      // setWaiterId('');
       
     } catch (err) {
+      console.error('Failed to place order:', err);
       setError('Failed to place order: ' + (err.response?.data?.error || err.message));
-      console.error(err);
     }
   };
   
-  const handlePrintReceipt = () => {
-    // Implement printing functionality here
-    alert('Receipt would be printed here in a real-world implementation');
+  // Update the handlePrintReceipts function to use the cart data for new orders
+  const handlePrintReceipts = async (orderId) => {
+    try {
+      // For a newly created order, we'll use the cart data directly
+      // since the order items might not be immediately available from the API
+      
+      // Separate items into food and drinks
+      const foodItems = cart.filter(item => item.item_type === 'food');
+      const drinkItems = cart.filter(item => item.item_type === 'drink');
+      
+      // Print kitchen receipt if there are food items
+      if (foodItems.length > 0) {
+        const kitchenReceipt = {
+          type: 'kitchen',
+          items: foodItems,
+          orderId: orderId,
+          timestamp: new Date().toISOString(),
+          waiterId: waiterId,
+          waiterName: waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown'
+        };
+        
+        // Print kitchen receipt - in real system this would go to the kitchen printer
+        console.log('Printing kitchen receipt:', kitchenReceipt);
+        
+        // Format kitchen receipt for display
+        let kitchenContent = `KITCHEN ORDER: #${orderId}\n`;
+        kitchenContent += `--------------------------------\n`;
+        kitchenContent += `Time: ${new Date().toLocaleTimeString()}\n`;
+        kitchenContent += `Waiter: ${kitchenReceipt.waiterName}\n`;
+        kitchenContent += `--------------------------------\n\n`;
+        
+        foodItems.forEach(item => {
+          kitchenContent += `${item.quantity}x ${item.name}\n`;
+        });
+        
+        kitchenContent += `\n--------------------------------\n`;
+        
+        // Show kitchen receipt in alert
+        alert(kitchenContent);
+        
+        await printReceipt(kitchenReceipt);
+      }
+      
+      // Print barman receipt if there are drink items
+      if (drinkItems.length > 0) {
+        const barmanReceipt = {
+          type: 'barman',
+          items: drinkItems,
+          orderId: orderId,
+          timestamp: new Date().toISOString(),
+          waiterId: waiterId,
+          waiterName: waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown'
+        };
+        
+        // Print bar receipt - in real system this would go to the bar printer
+        console.log('Printing bar receipt:', barmanReceipt);
+        
+        // Format bar receipt for display
+        let barContent = `BAR ORDER: #${orderId}\n`;
+        barContent += `--------------------------------\n`;
+        barContent += `Time: ${new Date().toLocaleTimeString()}\n`;
+        barContent += `Waiter: ${barmanReceipt.waiterName}\n`;
+        barContent += `--------------------------------\n\n`;
+        
+        drinkItems.forEach(item => {
+          barContent += `${item.quantity}x ${item.name}\n`;
+        });
+        
+        barContent += `\n--------------------------------\n`;
+        
+        // Show bar receipt in alert
+        alert(barContent);
+        
+        await printReceipt(barmanReceipt);
+      }
+      
+    } catch (error) {
+      console.error('Error printing receipts:', error);
+      setError('Failed to print receipts');
+    }
+  };
+  
+  // Modify printReceipt to support offline mode
+  const printReceipt = async (receiptData) => {
+    try {
+      if (navigator.onLine) {
+        const response = await axios.post('http://localhost:5001/api/print-receipt', receiptData, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        
+        if (response.data.success) {
+          console.log(`${receiptData.type} receipt printed successfully`);
+        } else {
+          throw new Error('Failed to print receipt');
+        }
+      } else {
+        // Store receipt offline
+        offlineService.saveReceiptOffline(receiptData);
+        console.log(`${receiptData.type} receipt saved offline`);
+      }
+    } catch (error) {
+      console.error(`Error printing ${receiptData.type} receipt:`, error);
+      throw error;
+    }
   };
   
   // Filter items based on active tab
@@ -218,11 +365,172 @@ export default function OrderEntry() {
     ? items 
     : items.filter(item => item.item_type === activeTab);
   
+  // Add handlePrintOrder function
+  const handlePrintOrder = async () => {
+    if (cart.length === 0) {
+      setError('Cart is empty. Please add items to print an order.');
+      return;
+    }
+    
+    if (!waiterId) {
+      setError('Please select a waiter');
+      return;
+    }
+
+    try {
+      // Separate items into food and drinks
+      const foodItems = cart.filter(item => item.item_type === 'food');
+      const drinkItems = cart.filter(item => item.item_type === 'drink');
+
+      if (foodItems.length === 0 && drinkItems.length === 0) {
+        setError('Cart must contain at least one food or drink item');
+        return;
+      }
+
+      const orderId = `draft-${Date.now()}`; // Create a temporary ID for draft orders
+      const waiterName = waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown';
+      
+      // Store the complete order data in localStorage
+      const orderData = {
+        foodItems,
+        drinkItems,
+        orderId,
+        timestamp: new Date().toISOString(),
+        waiterId,
+        waiterName,
+        isDraft: true
+      };
+      
+      // Save the order data for the OrderTicket component to use
+      localStorage.setItem('order_data', JSON.stringify(orderData));
+      
+      // Only make API calls when online - and only do it once in the background
+      // This makes the navigation to OrderTicket much faster
+      if (navigator.onLine) {
+        // Save data to server in background without blocking
+        setTimeout(() => {
+          const saveTicketsToServer = async () => {
+            try {
+              // Save kitchen ticket if there are food items
+              if (foodItems.length > 0) {
+                await axios.post('http://localhost:5001/api/print-receipt', {
+                  type: 'kitchen',
+                  items: foodItems,
+                  orderId,
+                  timestamp: new Date().toISOString(),
+                  waiterId,
+                  waiterName,
+                  isDraft: true
+                }, {
+                  headers: {
+                    Authorization: `Bearer ${token}`
+                  }
+                });
+              }
+              
+              // Save bar ticket if there are drink items
+              if (drinkItems.length > 0) {
+                await axios.post('http://localhost:5001/api/print-receipt', {
+                  type: 'barman',
+                  items: drinkItems,
+                  orderId,
+                  timestamp: new Date().toISOString(),
+                  waiterId,
+                  waiterName,
+                  isDraft: true
+                }, {
+                  headers: {
+                    Authorization: `Bearer ${token}`
+                  }
+                });
+              }
+              console.log('Successfully saved tickets to server in background');
+            } catch (err) {
+              console.error('Background saving of tickets failed:', err);
+              // Store in offline service for later sync
+              if (foodItems.length > 0) {
+                offlineService.saveReceiptOffline({
+                  type: 'kitchen',
+                  items: foodItems,
+                  orderId,
+                  timestamp: new Date().toISOString(),
+                  waiterId,
+                  waiterName,
+                  isDraft: true
+                });
+              }
+              
+              if (drinkItems.length > 0) {
+                offlineService.saveReceiptOffline({
+                  type: 'barman',
+                  items: drinkItems,
+                  orderId,
+                  timestamp: new Date().toISOString(),
+                  waiterId,
+                  waiterName,
+                  isDraft: true
+                });
+              }
+            }
+          };
+          
+          saveTicketsToServer();
+        }, 100);
+      } else {
+        // Store receipts offline
+        if (foodItems.length > 0) {
+          offlineService.saveReceiptOffline({
+            type: 'kitchen',
+            items: foodItems,
+            orderId,
+            timestamp: new Date().toISOString(),
+            waiterId,
+            waiterName,
+            isDraft: true
+          });
+        }
+        
+        if (drinkItems.length > 0) {
+          offlineService.saveReceiptOffline({
+            type: 'barman',
+            items: drinkItems,
+            orderId,
+            timestamp: new Date().toISOString(),
+            waiterId,
+            waiterName,
+            isDraft: true
+          });
+        }
+      }
+      
+      // Navigate to the ticket page immediately without waiting for API calls
+      navigate('/cashier/order-ticket');
+      
+    } catch (error) {
+      console.error('Error preparing order ticket:', error);
+      setError('Failed to prepare order ticket: ' + (error.response?.data?.error || error.message));
+    }
+  };
+  
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
         New Order
+        {isOffline && (
+          <Chip
+            label="Offline Mode"
+            color="warning"
+            size="small"
+            sx={{ ml: 2, verticalAlign: 'middle' }}
+          />
+        )}
       </Typography>
+      
+      {syncStatus && (
+        <Typography variant="body2" color={isOffline ? "warning.main" : "success.main"} sx={{ mb: 2 }}>
+          {syncStatus}
+        </Typography>
+      )}
       
       <Grid container spacing={3}>
         {/* Left side - Menu Items */}
@@ -324,39 +632,21 @@ export default function OrderEntry() {
             </Box>
             
             <Box sx={{ mb: 3 }}>
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="Table Number"
-                    variant="outlined"
-                    value={tableNumber}
-                    onChange={(e) => setTableNumber(e.target.value)}
-                    required
-                  />
-                </Grid>
-                
-                {user?.role === 'cashier' && (
-                  <Grid item xs={12}>
-                    <FormControl fullWidth>
-                      <InputLabel id="waiter-select-label">Select Waiter</InputLabel>
+              <FormControl fullWidth sx={{ mb: 2 }}>
+                <InputLabel>Select Waiter</InputLabel>
                       <Select
-                        labelId="waiter-select-label"
                         value={waiterId}
+                  onChange={(e) => setWaiterId(e.target.value)}
                         label="Select Waiter"
-                        onChange={(e) => setWaiterId(e.target.value)}
                         required
                       >
-                        {waiters.map(waiter => (
+                  {waiters.map((waiter) => (
                           <MenuItem key={waiter.id} value={waiter.id}>
                             {waiter.username}
                           </MenuItem>
                         ))}
                       </Select>
                     </FormControl>
-                  </Grid>
-                )}
-              </Grid>
             </Box>
             
             <Divider sx={{ mb: 2 }} />
@@ -423,18 +713,19 @@ export default function OrderEntry() {
                   <Button
                     variant="outlined"
                     color="primary"
+                    size="large"
                     startIcon={<PrintIcon />}
-                    onClick={handlePrintReceipt}
+                    onClick={handlePrintOrder}
                     disabled={cart.length === 0}
+                    sx={{ flexGrow: 1, mr: 1 }}
                   >
-                    Print
+                    Print Order
                   </Button>
                   <Button
                     variant="contained"
                     color="primary"
                     size="large"
-                    fullWidth
-                    sx={{ ml: 2 }}
+                    sx={{ flexGrow: 1, ml: 1 }}
                     onClick={handlePlaceOrder}
                     disabled={cart.length === 0}
                   >

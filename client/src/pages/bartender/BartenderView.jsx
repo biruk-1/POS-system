@@ -15,21 +15,43 @@ import {
   Divider,
   Box,
   Alert,
-  Badge
+  Badge,
+  Avatar,
+  Tabs,
+  Tab,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  Paper,
+  IconButton
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
   LocalBar as LocalBarIcon,
-  PlayArrow as PlayArrowIcon
+  PlayArrow as PlayArrowIcon,
+  History as HistoryIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import { API_ENDPOINTS } from '../../config/api';
+import io from 'socket.io-client';
+
+// Function to get the correct image URL
+const getItemImageUrl = (image) => {
+  if (image && image.startsWith('/uploads/')) {
+    return `http://localhost:5001${image}`;
+  }
+  return image || 'https://via.placeholder.com/60x60?text=Drink';
+};
 
 export default function BartenderView() {
   const [orders, setOrders] = useState([]);
+  const [historyOrders, setHistoryOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [refreshTime, setRefreshTime] = useState(Date.now());
+  const [tabValue, setTabValue] = useState(0);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   
   // Auto-refresh every 30 seconds
   useEffect(() => {
@@ -39,16 +61,168 @@ export default function BartenderView() {
     
     return () => clearInterval(interval);
   }, []);
+
+  // Handle tab change
+  const handleTabChange = (event, newValue) => {
+    setTabValue(newValue);
+  };
+  
+  // Function to move completed orders to history after delay
+  const moveToHistory = (orderId) => {
+    console.log(`[Bartender] Scheduling order ${orderId} to move to history in 2 minutes`);
+    
+    // Mark the order with a temporary flag to indicate it's scheduled for history
+    setOrders(prevOrders => {
+      // Check if this order is already scheduled for history
+      const orderToUpdate = prevOrders.find(order => order.orderId === orderId);
+      if (orderToUpdate && orderToUpdate.scheduledForHistory) {
+        console.log(`[Bartender] Order ${orderId} already scheduled for history, skipping`);
+        return prevOrders; // Don't schedule again
+      }
+      
+      console.log(`[Bartender] Marking order ${orderId} as scheduled for history`);
+      return prevOrders.map(order => 
+        order.orderId === orderId 
+          ? { ...order, scheduledForHistory: true, readyTime: new Date().toISOString() } 
+          : order
+      );
+    });
+    
+    console.log(`[Bartender] Setting timeout for order ${orderId} to move to history in 2 minutes`);
+    setTimeout(() => {
+      console.log(`[Bartender] 2-minute timeout completed for order ${orderId}, processing move to history`);
+      setOrders(prevOrders => {
+        const orderToMove = prevOrders.find(order => order.orderId === orderId);
+        if (orderToMove) {
+          // Add to history
+          const historicalOrder = {
+            ...orderToMove,
+            completedAt: new Date().toLocaleTimeString()
+          };
+          
+          console.log('[Bartender] Moving order to history:', historicalOrder);
+          setHistoryOrders(prev => {
+            console.log('[Bartender] Current history count:', prev.length, 'Adding new item');
+            return [historicalOrder, ...prev];
+          });
+          
+          // Remove from active orders
+          console.log(`[Bartender] Removing order ${orderId} from active orders`);
+          return prevOrders.filter(order => order.orderId !== orderId);
+        }
+        console.log(`[Bartender] Order ${orderId} not found in active orders, may have been removed already`);
+        return prevOrders;
+      });
+    }, 2 * 60 * 1000); // 2 minutes
+  };
+  
+  // Socket.IO connection for real-time updates
+  useEffect(() => {
+    console.log('Setting up Socket.IO connection for Bartender View');
+    const socket = io('http://localhost:5001');
+    
+    socket.on('connect', () => {
+      console.log('Bartender connected to socket server with ID:', socket.id);
+    });
+    
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setError('Failed to connect to real-time updates. Please refresh.');
+    });
+    
+    socket.on('new_drink_order', (orderItem) => {
+      console.log('New drink order received in Bartender View:', orderItem);
+      
+      setOrders(prevOrders => {
+        // Check if we already have an order with this ID
+        const existingOrderIndex = prevOrders.findIndex(order => 
+          order.orderId === orderItem.order_id
+        );
+        
+        if (existingOrderIndex !== -1) {
+          // Add item to existing order
+          const updatedOrders = [...prevOrders];
+          updatedOrders[existingOrderIndex].items.push({
+            id: orderItem.item_id,
+            name: orderItem.item_name,
+            quantity: orderItem.quantity,
+            status: orderItem.status,
+            description: orderItem.item_description,
+            image: orderItem.item_image
+          });
+          return updatedOrders;
+        } else {
+          // Create a new order
+          return [...prevOrders, {
+            orderId: orderItem.order_id,
+            tableNumber: orderItem.table_number,
+            orderTime: new Date(orderItem.order_time).toLocaleTimeString(),
+            items: [{
+              id: orderItem.item_id,
+              name: orderItem.item_name,
+              quantity: orderItem.quantity,
+              status: orderItem.status,
+              description: orderItem.item_description,
+              image: orderItem.item_image
+            }]
+          }];
+        }
+      });
+    });
+    
+    socket.on('order_item_updated', (updatedItem) => {
+      if (updatedItem.item_type === 'drink') {
+        console.log('Drink order item updated:', updatedItem);
+        
+        setOrders(prevOrders => 
+          prevOrders.map(order => {
+            // Find the order that contains this item
+            const orderContainsItem = order.items.some(item => item.id === updatedItem.id);
+            
+            if (orderContainsItem) {
+              // Update the item in this order
+              return {
+                ...order,
+                items: order.items.map(item => 
+                  item.id === updatedItem.id 
+                    ? { 
+                        ...item, 
+                        status: updatedItem.status,
+                        name: updatedItem.name || item.name,
+                        description: updatedItem.description || item.description,
+                        image: updatedItem.image || item.image
+                      } 
+                    : item
+                )
+              };
+            }
+            
+            return order;
+          })
+        );
+      }
+    });
+    
+    return () => {
+      console.log('Disconnecting Bartender socket');
+      socket.disconnect();
+    };
+  }, []);
   
   useEffect(() => {
+    console.log('Fetching initial bartender orders');
     const fetchOrders = async () => {
       try {
         setLoading(true);
+        console.log('Making API request to', API_ENDPOINTS.BARTENDER_TERMINAL, 'with token');
         const response = await axios.get(API_ENDPOINTS.BARTENDER_TERMINAL, {
           headers: {
             Authorization: `Bearer ${token}`
           }
         });
+        
+        console.log('Bartender orders API response:', response.data);
+        console.log('Bartender orders count:', response.data.length);
         
         // Group orders by order_id
         const groupedOrders = {};
@@ -62,20 +236,25 @@ export default function BartenderView() {
             };
           }
           
+          console.log(`Adding item ${item.item_id} (${item.item_name}) to order ${item.order_id}`);
           groupedOrders[item.order_id].items.push({
             id: item.item_id,
             name: item.item_name,
             quantity: item.quantity,
             status: item.item_status,
-            description: item.item_description
+            description: item.item_description,
+            image: item.item_image
           });
         });
         
-        setOrders(Object.values(groupedOrders));
+        const processedOrders = Object.values(groupedOrders);
+        console.log('Processed bartender orders:', processedOrders);
+        console.log('Order count after processing:', processedOrders.length);
+        setOrders(processedOrders);
         setError('');
       } catch (err) {
+        console.error('Error fetching bartender orders:', err);
         setError('Failed to load orders. Please try again.');
-        console.error(err);
       } finally {
         setLoading(false);
       }
@@ -86,6 +265,7 @@ export default function BartenderView() {
   
   const handleStatusChange = async (itemId, newStatus) => {
     try {
+      console.log(`[Bartender] Changing item ${itemId} status to ${newStatus}`);
       await axios.put(`${API_ENDPOINTS.ORDER_ITEMS}/${itemId}/status`, {
         status: newStatus
       }, {
@@ -95,107 +275,45 @@ export default function BartenderView() {
       });
       
       // Update local state
-      setOrders(orders.map(order => ({
-        ...order,
-        items: order.items.map(item => 
-          item.id === itemId 
-            ? { ...item, status: newStatus } 
-            : item
-        )
-      })));
-    } catch (err) {
-      setError('Failed to update item status');
-      console.error(err);
-    }
-  };
-  
-  const handleMarkReady = async (itemId) => {
-    try {
-      await axios.put(`${API_ENDPOINTS.ORDER_ITEMS}/${itemId}/status`, {
-        status: 'ready'
-      }, {
-        headers: {
-          Authorization: `Bearer ${token}`
+      setOrders(prevOrders => prevOrders.map(order => {
+        const updatedOrder = {
+          ...order,
+          items: order.items.map(item => 
+            item.id === itemId 
+              ? { ...item, status: newStatus } 
+              : item
+          )
+        };
+        
+        // Check if all items in the order are now ready and not already scheduled
+        const allItemsReady = updatedOrder.items.every(item => item.status === 'ready');
+        if (allItemsReady && !updatedOrder.scheduledForHistory) {
+          console.log(`[Bartender] All items in order ${updatedOrder.orderId} are ready, scheduling for history`);
+          // Schedule to move this order to history after 2 minutes
+          moveToHistory(updatedOrder.orderId);
         }
-      });
-      
-      // Update local state
-      setOrders(orders.map(order => ({
-        ...order,
-        items: order.items.map(item => 
-          item.id === itemId 
-            ? { ...item, status: 'ready' } 
-            : item
-        )
-      })));
+        
+        return updatedOrder;
+      }));
     } catch (err) {
       setError('Failed to update item status');
-      console.error(err);
+      console.error('[Bartender] Error updating item status:', err);
     }
   };
   
-  const handleMarkAllReady = async (orderId) => {
-    const orderItems = orders.find(order => order.orderId === orderId)?.items || [];
-    const pendingItems = orderItems.filter(item => item.status === 'pending');
-    
-    try {
-      // Process all items in parallel
-      await Promise.all(
-        pendingItems.map(item => 
-          axios.put(`${API_ENDPOINTS.ORDER_ITEMS}/${item.id}/status`, {
-            status: 'ready'
-          }, {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          })
-        )
-      );
-      
-      // Update local state
-      setOrders(orders.map(order => 
-        order.orderId === orderId 
-          ? {
-              ...order,
-              items: order.items.map(item => ({
-                ...item,
-                status: item.status === 'pending' ? 'ready' : item.status
-              }))
-            }
-          : order
-      ));
-    } catch (err) {
-      setError('Failed to update items');
-      console.error(err);
-    }
-  };
+  // Filter orders based on the selected tab
+  const filteredOrders = orders.filter(order => {
+    if (tabValue === 0) return true; // All orders
+    if (tabValue === 1) return order.items.some(item => item.status === 'pending'); // Pending
+    if (tabValue === 2) return order.items.some(item => item.status === 'in-progress'); // In Progress
+    if (tabValue === 3) return order.items.every(item => item.status === 'ready'); // Ready
+    return true;
+  });
   
-  // Auto-complete drinks after a delay if configured
-  useEffect(() => {
-    // Check for any drinks that have been in-progress for a while
-    const autoMarkReady = async () => {
-      try {
-        const currentTime = new Date();
-        orders.forEach(order => {
-          order.items.forEach(item => {
-            if (item.status === 'in-progress') {
-              // Mark drink as ready after 5 minutes (configurable)
-              // This would typically be stored in settings
-              setTimeout(() => {
-                handleStatusChange(item.id, 'ready');
-              }, 300000); // 5 minutes in ms (300 seconds)
-            }
-          });
-        });
-      } catch (error) {
-        console.error('Error in auto-complete timer:', error);
-      }
-    };
-    
-    if (orders.length > 0) {
-      autoMarkReady();
-    }
-  }, [orders]);
+  // Count orders by status for badge counts
+  const pendingCount = orders.filter(order => order.items.some(item => item.status === 'pending')).length;
+  const inProgressCount = orders.filter(order => order.items.some(item => item.status === 'in-progress')).length;
+  const readyCount = orders.filter(order => order.items.every(item => item.status === 'ready')).length;
   
   if (loading && orders.length === 0) {
     return (
@@ -205,34 +323,115 @@ export default function BartenderView() {
     );
   }
   
-  if (error) {
-    return (
-      <Box sx={{ p: 4 }}>
-        <Alert severity="error">{error}</Alert>
-      </Box>
-    );
-  }
-  
-  if (orders.length === 0) {
-    return (
-      <Box sx={{ p: 4, textAlign: 'center' }}>
-        <Typography variant="h5">No pending drink orders!</Typography>
-        <Typography variant="body1" sx={{ mt: 2 }}>
-          New orders will appear here automatically.
-        </Typography>
-      </Box>
-    );
-  }
-  
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
-        Drink Orders
-      </Typography>
+      {/* Header with tabs and history button */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h4" gutterBottom>
+          Drink Orders
+        </Typography>
+        
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            startIcon={<RefreshIcon />}
+            onClick={() => setRefreshTime(Date.now())}
+          >
+            Refresh
+          </Button>
+          <Button 
+            variant="outlined" 
+            color="secondary" 
+            startIcon={<HistoryIcon />}
+            onClick={() => setHistoryDialogOpen(true)}
+            sx={{ ml: 2 }}
+          >
+            Order History
+          </Button>
+        </Box>
+      </Box>
       
+      {/* Filter tabs */}
+      <Paper sx={{ mb: 3 }}>
+        <Tabs 
+          value={tabValue} 
+          onChange={handleTabChange} 
+          variant="fullWidth" 
+          indicatorColor="primary"
+          textColor="primary"
+        >
+          <Tab 
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <span>All Orders</span>
+                <Badge 
+                  badgeContent={orders.length} 
+                  color="primary" 
+                  sx={{ ml: 1 }}
+                />
+              </Box>
+            } 
+          />
+          <Tab 
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <span>New Orders</span>
+                <Badge 
+                  badgeContent={pendingCount} 
+                  color="error" 
+                  sx={{ ml: 1 }}
+                />
+              </Box>
+            } 
+          />
+          <Tab 
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <span>In Progress</span>
+                <Badge 
+                  badgeContent={inProgressCount} 
+                  color="warning" 
+                  sx={{ ml: 1 }}
+                />
+              </Box>
+            } 
+          />
+          <Tab 
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                <span>Ready</span>
+                <Badge 
+                  badgeContent={readyCount} 
+                  color="success" 
+                  sx={{ ml: 1 }}
+                />
+              </Box>
+            } 
+          />
+        </Tabs>
+      </Paper>
+      
+      {/* Error message */}
+      {error && (
+        <Box sx={{ p: 2, mb: 2 }}>
+          <Alert severity="error">{error}</Alert>
+        </Box>
+      )}
+      
+      {/* No orders message */}
+      {filteredOrders.length === 0 && !loading && (
+        <Box sx={{ p: 4, textAlign: 'center' }}>
+          <Typography variant="h5">No {tabValue > 0 ? ['', 'pending', 'in-progress', 'ready'][tabValue] : ''} drink orders!</Typography>
+          <Typography variant="body1" sx={{ mt: 2 }}>
+            New orders will appear here automatically.
+          </Typography>
+        </Box>
+      )}
+      
+      {/* Orders Grid */}
       <Grid container spacing={3}>
-        {orders.map(order => {
-          const pendingCount = order.items.filter(item => item.status === 'pending').length;
+        {filteredOrders.map(order => {
           return (
             <Grid item xs={12} md={6} lg={4} key={order.orderId}>
               <Card 
@@ -245,35 +444,8 @@ export default function BartenderView() {
                 }}
               >
                 <CardHeader
-                  title={
-                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <Typography variant="h6" component="div">
-                        Table {order.tableNumber || 'N/A'}
-                      </Typography>
-                      {pendingCount > 0 && (
-                        <Badge 
-                          badgeContent={pendingCount} 
-                          color="primary" 
-                          sx={{ ml: 1 }}
-                        />
-                      )}
-                    </Box>
-                  }
+                  title={`Table ${order.tableNumber || 'N/A'}`}
                   subheader={`Order #${order.orderId} - ${order.orderTime}`}
-                  action={
-                    pendingCount > 0 && (
-                      <Button 
-                        size="small"
-                        color="primary"
-                        variant="contained"
-                        onClick={() => handleMarkAllReady(order.orderId)}
-                        startIcon={<CheckCircleIcon />}
-                        sx={{ mt: 1 }}
-                      >
-                        All Ready
-                      </Button>
-                    )
-                  }
                   sx={{ 
                     backgroundColor: '#e6f3ff',
                     '& .MuiCardHeader-title': {
@@ -291,20 +463,27 @@ export default function BartenderView() {
                               <Button
                                 size="small"
                                 color="primary"
-                                onClick={() => handleMarkReady(item.id)}
+                                onClick={() => handleStatusChange(item.id, 'ready')}
+                                variant="outlined"
                                 startIcon={<LocalBarIcon />}
                               >
-                                Ready
+                                Mark Ready
                               </Button>
                             ) : (
                               <Chip 
-                                label="READY" 
-                                color="success"
+                                label={item.status.toUpperCase()}
+                                color={item.status === 'ready' ? 'success' : 'warning'}
                                 size="small"
                               />
                             )
                           }
                         >
+                          <Avatar 
+                            src={getItemImageUrl(item.image)} 
+                            alt={item.name}
+                            variant="rounded"
+                            sx={{ mr: 2, width: 50, height: 50 }}
+                          />
                           <ListItemText
                             primary={`${item.quantity}x ${item.name}`}
                             secondary={item.description}
@@ -321,6 +500,62 @@ export default function BartenderView() {
           );
         })}
       </Grid>
+      
+      {/* History Dialog */}
+      <Dialog 
+        open={historyDialogOpen} 
+        onClose={() => setHistoryDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6">Order History</Typography>
+            <Button onClick={() => setHistoryDialogOpen(false)}>Close</Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          {historyOrders.length === 0 ? (
+            <Box sx={{ p: 3, textAlign: 'center' }}>
+              <Typography variant="body1">No completed orders in history yet.</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Orders marked as ready will appear here after 2 minutes.
+              </Typography>
+            </Box>
+          ) : (
+            <Grid container spacing={2}>
+              {historyOrders.map(order => (
+                <Grid item xs={12} key={order.orderId}>
+                  <Card sx={{ mb: 2 }}>
+                    <CardHeader
+                      title={`Order #${order.orderId} - Table ${order.tableNumber}`}
+                      subheader={`Ordered: ${order.orderTime} | Completed: ${order.completedAt}`}
+                    />
+                    <CardContent>
+                      <List dense>
+                        {order.items.map(item => (
+                          <ListItem key={item.id}>
+                            <Avatar 
+                              src={getItemImageUrl(item.image)} 
+                              variant="rounded"
+                              sx={{ mr: 2, width: 40, height: 40 }}
+                            />
+                            <ListItemText 
+                              primary={item.name} 
+                              secondary={`Quantity: ${item.quantity}`} 
+                            />
+                            <Chip label="Completed" color="success" size="small" />
+                          </ListItem>
+                        ))}
+                      </List>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          )}
+        </DialogContent>
+      </Dialog>
     </Box>
   );
 } 

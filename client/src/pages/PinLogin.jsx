@@ -71,10 +71,10 @@ export default function PinLogin() {
           navigate('/cashier/dashboard');
           break;
         case 'kitchen':
-          navigate('/kitchen/dashboard');
+          navigate('/kitchen');
           break;
         case 'bartender':
-          navigate('/bartender/dashboard');
+          navigate('/bartender');
           break;
         default:
           navigate('/');
