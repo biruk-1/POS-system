@@ -435,10 +435,6 @@ export default function Receipt() {
     alert('Email receipt functionality would be implemented here');
   };
   
-  const handleBack = () => {
-    navigate('/cashier/dashboard');
-  };
-  
   const handlePlaceOrder = async () => {
     try {
       // Update the existing order's status
@@ -484,6 +480,10 @@ export default function Receipt() {
     }
   };
   
+  const handleBackToDashboard = () => {
+    navigate('/cashier/dashboard');
+  };
+  
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" height="80vh">
@@ -499,7 +499,7 @@ export default function Receipt() {
         <Button
           variant="outlined"
           startIcon={<ArrowBackIcon />}
-          onClick={handleBack}
+          onClick={handleBackToDashboard}
           sx={{ mt: 2 }}
         >
           Back to Dashboard
@@ -514,31 +514,34 @@ export default function Receipt() {
       <style>{printStyles}</style>
       
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }} className="no-print">
-        <Button
-          variant="outlined"
-          startIcon={<ArrowBackIcon />}
-          onClick={handleBack}
-        >
-          Back
-        </Button>
+        <Typography variant="h4" fontWeight="bold">
+          Customer Receipt
+        </Typography>
         
-        <Box>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<ArrowBackIcon />}
+            onClick={handleBackToDashboard}
+          >
+            Back to Dashboard
+          </Button>
+          
           <Button
             variant="outlined"
             startIcon={<EmailIcon />}
             onClick={handleEmailReceipt}
-            sx={{ mr: 1 }}
           >
             Email
           </Button>
           <Button
             variant="contained"
             color="primary"
-            startIcon={<ReceiptIcon />}
-            onClick={handlePlaceOrder}
+            startIcon={<PrintIcon />}
+            onClick={handlePrint}
             disabled={loading || !receipt}
           >
-            Place Order
+            Print Receipt
           </Button>
         </Box>
       </Box>

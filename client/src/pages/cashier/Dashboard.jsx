@@ -43,7 +43,8 @@ import {
   ListItemIcon,
   Menu,
   List,
-  InputAdornment
+  InputAdornment,
+  ListSubheader
 } from '@mui/material';
 import {
   MoreVert as MoreVertIcon,
@@ -98,6 +99,64 @@ export default function CashierDashboard() {
   // Add offline state
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [syncStatus, setSyncStatus] = useState({ syncing: false, message: '' });
+
+  // Add date filter state and initialize to today's date
+  const today = new Date();
+  const todayFormatted = today.toISOString().split('T')[0];
+  console.log('Today formatted:', todayFormatted);
+  
+  const [dateFilter, setDateFilter] = useState(todayFormatted); // Default to today
+  const [filteredOrders, setFilteredOrders] = useState([]);
+  const [customDate, setCustomDate] = useState('');
+
+  // Function to extract available dates from orders
+  const getAvailableDates = (ordersData) => {
+    const dates = {};
+    const result = [];
+    
+    // Extract unique dates from orders
+    ordersData.forEach(order => {
+      if (order.created_at) {
+        try {
+          const date = new Date(order.created_at);
+          const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+          
+          if (!dates[dateString]) {
+            dates[dateString] = {
+              date: dateString,
+              count: 0,
+              display: date.toLocaleDateString()
+            };
+          }
+          
+          dates[dateString].count++;
+        } catch (e) {
+          console.error(`Error parsing date for order ${order.id}:`, e);
+        }
+      }
+    });
+    
+    // Convert to array and sort by date (newest first)
+    Object.values(dates).forEach(item => {
+      result.push(item);
+    });
+    
+    result.sort((a, b) => new Date(b.date) - new Date(a.date));
+    
+    console.log('Available dates from orders:', result);
+    return result;
+  };
+  
+  // State to store available dates
+  const [availableDates, setAvailableDates] = useState([]);
+  
+  // Update available dates when orders change
+  useEffect(() => {
+    if (orders.length > 0) {
+      const dates = getAvailableDates(orders);
+      setAvailableDates(dates);
+    }
+  }, [orders]);
 
   // Setup online/offline listeners
   useEffect(() => {
@@ -195,6 +254,65 @@ export default function CashierDashboard() {
       console.log('Cashier connected to socket server');
     });
     
+    // Listen for new orders
+    socket.on('order_created', (newOrder) => {
+      console.log('New order received:', newOrder);
+      
+      // Add the new order to the orders list
+      setOrders(prevOrders => {
+        const updatedOrders = [newOrder, ...prevOrders];
+        
+        // Also update filtered orders if this order is for today or if showing all orders
+        const orderDate = new Date(newOrder.created_at);
+        const orderDateString = orderDate.toISOString().split('T')[0];
+        const today = new Date().toISOString().split('T')[0];
+        
+        console.log(`New order date: ${orderDateString}, Today: ${today}, Current filter: ${dateFilter}`);
+        
+        if (dateFilter === 'all' || (dateFilter === today && orderDateString === today)) {
+          setFilteredOrders(prevFiltered => [newOrder, ...prevFiltered]);
+        }
+        
+        return updatedOrders;
+      });
+      
+      // Refresh dashboard data
+      handleRefresh();
+      
+      setSnackbar({
+        open: true,
+        message: `New order #${newOrder.id} has been created`,
+        severity: 'success'
+      });
+    });
+    
+    // Listen for order status updates
+    socket.on('order_status_updated', (updatedOrder) => {
+      console.log('Order status updated:', updatedOrder);
+      
+      // Update the order in both lists
+      setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.id === updatedOrder.id 
+            ? { ...order, status: updatedOrder.status } 
+            : order
+        )
+      );
+      
+      setFilteredOrders(prevFiltered => 
+        prevFiltered.map(order => 
+          order.id === updatedOrder.id 
+            ? { ...order, status: updatedOrder.status } 
+            : order
+        )
+      );
+      
+      // Refresh dashboard data if status is completed or paid
+      if (updatedOrder.status === 'completed' || updatedOrder.status === 'paid') {
+        handleRefresh();
+      }
+    });
+    
     socket.on('bill_requested', (notification) => {
       console.log('Bill request received:', notification);
       // Ensure notification has all required fields
@@ -242,7 +360,113 @@ export default function CashierDashboard() {
     return () => {
       socket.disconnect();
     };
-  }, []);
+  }, [dateFilter]);
+
+  // Simplify the date filtering logic to a single implementation
+  useEffect(() => {
+    if (orders.length > 0) {
+      console.log(`Applying date filter: ${dateFilter} to ${orders.length} orders`);
+      
+      if (dateFilter === 'all') {
+        // Show all orders when 'all' is selected
+        setFilteredOrders(orders);
+        console.log(`Showing all ${orders.length} orders`);
+      } else {
+        // Create a date object from the filter string for comparison
+        const filterDate = new Date(dateFilter);
+        // Normalize to start of day in local timezone
+        filterDate.setHours(0, 0, 0, 0);
+        
+        const filtered = orders.filter(order => {
+          if (!order.created_at) return false;
+          
+          try {
+            // Create date object from order created_at
+            const orderDate = new Date(order.created_at);
+            // Normalize to start of day in local timezone
+            orderDate.setHours(0, 0, 0, 0);
+            
+            // Compare the date objects directly using getTime()
+            return orderDate.getTime() === filterDate.getTime();
+          } catch (e) {
+            console.error(`Error comparing dates for order ${order.id}:`, e);
+            return false;
+          }
+        });
+        
+        setFilteredOrders(filtered);
+        console.log(`Filtered to ${filtered.length} orders for date ${dateFilter}`);
+      }
+    } else {
+      setFilteredOrders([]);
+    }
+  }, [orders, dateFilter]);
+
+  const handleDateFilterChange = (event) => {
+    setDateFilter(event.target.value);
+    
+    // Refresh orders when date filter changes
+    console.log(`Date filter changed to: ${event.target.value}`);
+    fetchOrders();
+  };
+
+  // Debugging function to analyze order dates
+  const analyzeOrderDates = (orders) => {
+    const dateMap = {};
+    
+    orders.forEach(order => {
+      if (!order.created_at) {
+        console.log(`Order ${order.id} missing created_at field`);
+        return;
+      }
+      
+      try {
+        const orderDate = new Date(order.created_at);
+        const dateString = orderDate.toISOString().split('T')[0];
+        
+        if (!dateMap[dateString]) {
+          dateMap[dateString] = [];
+        }
+        
+        dateMap[dateString].push(order.id);
+      } catch (error) {
+        console.error(`Error parsing date for order ${order.id}:`, error);
+      }
+    });
+    
+    console.log('Orders by date:', dateMap);
+    return dateMap;
+  };
+  
+  // Modify fetchOrders to get all orders without filtering
+  const fetchOrders = async () => {
+    try {
+      if (navigator.onLine) {
+        const response = await axios.get('http://localhost:5001/api/orders', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        
+        // Store all orders without filtering
+        setOrders(response.data);
+        console.log(`Fetched ${response.data.length} orders from server`);
+        
+        // Apply date filtering in the effect hook, not here
+      } else {
+        const offlineOrders = offlineService.getOfflineOrders();
+        setOrders(offlineOrders);
+        console.log(`Retrieved ${offlineOrders.length} orders from offline storage`);
+      }
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to fetch orders',
+        severity: 'error'
+      });
+    }
+  };
 
   // Load existing bill requests when component mounts
   useEffect(() => {
@@ -275,28 +499,8 @@ export default function CashierDashboard() {
     };
     
     fetchBillRequests();
+    fetchOrders(); // Fetch orders on component mount
   }, [token]);
-
-  // Add fetchOrders function if it doesn't exist, or update it
-  useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        console.log('Fetching orders for cashier dashboard...');
-        const response = await axios.get('http://localhost:5001/api/orders', {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-        console.log('Fetched orders:', response.data);
-        setOrders(response.data);
-      } catch (error) {
-        console.error('Error fetching orders:', error);
-      }
-    };
-
-    fetchOrders();
-    // This effect should run after auth token is available and when dashboard is refreshed
-  }, [token, refreshing]);
 
   // Update the handleRefresh function to also refresh orders
   const handleRefresh = () => {
@@ -312,7 +516,13 @@ export default function CashierDashboard() {
       }
     });
     
-    // This will trigger both the dashboard data fetch and orders fetch
+    // Fetch new orders data
+    fetchOrders();
+    
+    // Fetch new dashboard data
+    fetchDashboardData();
+    
+    // Reset refreshing state after a short delay
     setTimeout(() => {
       setRefreshing(false);
     }, 1000);
@@ -341,14 +551,33 @@ export default function CashierDashboard() {
   };
 
   const handleUpdateOrderStatus = (order) => {
+    // Prevent duplicate dialog openings by checking if already open
+    if (orderStatusDialog) {
+      return;
+    }
+    
     setSelectedOrder(order);
-    setNewStatus(order.status || 'pending');
-    setPaymentAmount(order.total_amount?.toString() || '');
+    const initialStatus = order.status || 'pending';
+    setNewStatus(initialStatus);
+    
+    // Set initial payment amount if status is paid or completed
+    if (initialStatus === 'paid' || initialStatus === 'completed') {
+      setPaymentAmount(order.total_amount?.toString() || '0');
+    } else {
+      setPaymentAmount('');
+    }
+    
     setOrderStatusDialog(true);
   };
 
   const handleStatusChange = (event) => {
-    setNewStatus(event.target.value);
+    const status = event.target.value;
+    setNewStatus(status);
+    
+    // Set default payment amount when status changes to completed or paid
+    if ((status === 'completed' || status === 'paid') && selectedOrder) {
+      setPaymentAmount(selectedOrder.total_amount?.toString() || '0');
+    }
   };
 
   const handlePaymentAmountChange = (event) => {
@@ -361,18 +590,50 @@ export default function CashierDashboard() {
 
   const handleSubmitStatusUpdate = async () => {
     try {
+      setLoading(true);
+      
+      // Check if payment amount is required but not provided (only for "paid" status)
+      if (newStatus === 'paid' && (!paymentAmount || parseFloat(paymentAmount) <= 0)) {
+        setSnackbar({
+          open: true,
+          message: 'Please enter a valid payment amount',
+          severity: 'error'
+        });
+        setLoading(false);
+        return;
+      }
+      
+      // For "completed" status, we'll use the order's total amount if no payment is specified
+      const paymentToSend = newStatus === 'paid' 
+        ? parseFloat(paymentAmount) 
+        : (parseFloat(paymentAmount) || selectedOrder.total_amount || 0);
+      
+      console.log('Sending status update with payment:', {
+        status: newStatus,
+        payment_amount: paymentToSend
+      });
+      
       // API call to update order status
       const response = await axios.put(`http://localhost:5001/api/orders/${selectedOrder.id}/status`, {
         status: newStatus,
-        payment_amount: parseFloat(paymentAmount)
+        payment_amount: paymentToSend
       }, {
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
       
+      console.log('Order status update response:', response.data);
+      
       // Update order in local state
       setOrders(prevOrders => 
+        prevOrders.map(order => 
+          order.id === selectedOrder.id ? { ...order, status: newStatus } : order
+        )
+      );
+      
+      // Also update in filtered orders
+      setFilteredOrders(prevOrders => 
         prevOrders.map(order => 
           order.id === selectedOrder.id ? { ...order, status: newStatus } : order
         )
@@ -384,15 +645,28 @@ export default function CashierDashboard() {
         severity: 'success'
       });
       
+      // Close dialog and reset state
       setOrderStatusDialog(false);
-      setRefreshing(true); // Trigger a refresh
+      setSelectedOrder(null);
+      setNewStatus('');
+      setPaymentAmount('');
+      
+      // Refresh orders data
+      fetchOrders();
+      
+      // Also refresh dashboard data if status is changed to completed or paid
+      if (newStatus === 'completed' || newStatus === 'paid') {
+        fetchDashboardData();
+      }
     } catch (error) {
       console.error('Error updating order status:', error);
       setSnackbar({
         open: true,
-        message: 'Failed to update order status',
+        message: 'Failed to update order status: ' + (error.response?.data?.message || error.message),
         severity: 'error'
       });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -469,6 +743,127 @@ export default function CashierDashboard() {
     if (diffHours === 1) return '1 hour ago';
     return `${diffHours} hours ago`;
   };
+
+  // Add the date filter UI component where the orders table is rendered
+  const renderOrdersTable = () => (
+    <Box>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Typography variant="h6">Recent Orders</Typography>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+          <FormControl sx={{ width: 220 }}>
+            <InputLabel>Filter by Date</InputLabel>
+            <Select
+              value={dateFilter}
+              onChange={handleDateFilterChange}
+              label="Filter by Date"
+            >
+              <MenuItem value="all">All Orders</MenuItem>
+              <MenuItem value={new Date().toISOString().split('T')[0]}>
+                Today ({new Date().toLocaleDateString()})
+              </MenuItem>
+              <MenuItem value={new Date(Date.now() - 86400000).toISOString().split('T')[0]}>
+                Yesterday ({new Date(Date.now() - 86400000).toLocaleDateString()})
+              </MenuItem>
+              
+              {availableDates.length > 0 && (
+                <>
+                  <Divider />
+                  <ListSubheader>Available Dates ({availableDates.length})</ListSubheader>
+                  {availableDates.map(dateItem => (
+                    <MenuItem key={dateItem.date} value={dateItem.date}>
+                      {dateItem.display} ({dateItem.count} orders)
+                    </MenuItem>
+                  ))}
+                </>
+              )}
+              
+              <Divider />
+              <MenuItem value="custom">Custom Date...</MenuItem>
+            </Select>
+          </FormControl>
+          
+          {dateFilter === 'custom' && (
+            <TextField
+              label="Select Date"
+              type="date"
+              value={customDate || new Date().toISOString().split('T')[0]}
+              onChange={(e) => {
+                const selectedDate = e.target.value;
+                setCustomDate(selectedDate);
+                setDateFilter(selectedDate);
+                console.log(`Custom date selected: ${selectedDate}`);
+              }}
+              sx={{ width: 220 }}
+              InputLabelProps={{
+                shrink: true,
+              }}
+            />
+          )}
+          
+          <IconButton
+            color="primary"
+            onClick={handleRefresh}
+            disabled={loading}
+          >
+            <RefreshIcon />
+          </IconButton>
+        </Box>
+      </Box>
+      <TableContainer component={Paper}>
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableCell>Order ID</TableCell>
+              <TableCell>Time</TableCell>
+              <TableCell>Items</TableCell>
+              <TableCell>Total</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {filteredOrders.map((order) => (
+              <TableRow key={order.id}>
+                <TableCell>{order.id}</TableCell>
+                <TableCell>{new Date(order.created_at).toLocaleTimeString()}</TableCell>
+                <TableCell>{order.items?.length || 0} items</TableCell>
+                <TableCell>{formatCurrency(order.total_amount)}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={order.status}
+                    color={getStatusColor(order.status)}
+                    size="small"
+                  />
+                </TableCell>
+                <TableCell>
+                  <IconButton
+                    onClick={() => handleUpdateOrderStatus(order)}
+                    color="primary"
+                    size="small"
+                  >
+                    <EditIcon />
+                  </IconButton>
+                  <IconButton
+                    onClick={() => handleGenerateReceipt(order)}
+                    color="secondary"
+                    size="small"
+                  >
+                    <PrintIcon />
+                  </IconButton>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    </Box>
+  );
+
+  // Add effect to fetch orders when component mounts or date filter changes
+  useEffect(() => {
+    console.log(`Fetching orders with filter: ${dateFilter}`);
+    fetchOrders();
+  }, [dateFilter, token]);
 
   if (loading) {
     return (
@@ -732,7 +1127,7 @@ export default function CashierDashboard() {
           <Card elevation={0} sx={{ 
             height: '100%',
             background: `linear-gradient(135deg, ${theme.palette.warning.light}15 0%, ${theme.palette.warning.main}15 100%)`,
-            border: `1px solid ${theme.palette.warning.light}30`,
+            border: `1px solid ${theme.palette.warning.main}30`,
             position: 'relative',
             overflow: 'hidden'
           }}>
@@ -750,7 +1145,7 @@ export default function CashierDashboard() {
                 alignItems: 'center',
               }}
             >
-              <RestaurantIcon sx={{ fontSize: 40, color: theme.palette.warning.main, opacity: 0.5 }} />
+              <ReceiptIcon sx={{ fontSize: 40, color: theme.palette.warning.main, opacity: 0.5 }} />
             </Box>
             <CardContent>
               <Typography color="warning.main" variant="overline">
@@ -765,233 +1160,9 @@ export default function CashierDashboard() {
             </CardContent>
           </Card>
         </Grid>
-
-        <Grid item xs={12} sm={6} md={3}>
-          <Card elevation={0} sx={{ 
-            height: '100%',
-            background: `linear-gradient(135deg, ${theme.palette.info.light}15 0%, ${theme.palette.info.main}15 100%)`,
-            border: `1px solid ${theme.palette.info.light}30`,
-            position: 'relative',
-            overflow: 'hidden'
-          }}>
-            <Box
-              sx={{
-                position: 'absolute',
-                top: -15,
-                right: -15,
-                backgroundColor: `${theme.palette.info.main}20`,
-                borderRadius: '50%',
-                width: 100,
-                height: 100,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-              }}
-            >
-              <PersonIcon sx={{ fontSize: 40, color: theme.palette.info.main, opacity: 0.5 }} />
-            </Box>
-            <CardContent>
-              <Typography color="info.main" variant="overline">
-                Avg. Order Value
-              </Typography>
-              <Typography variant="h4" component="div" fontWeight="bold" sx={{ mb: 1 }}>
-                {formatCurrency(data?.dailyRevenue / data?.completedOrders || 0)}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Average amount per order
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
       </Grid>
 
-      {/* Recent Orders Table */}
-      <Grid item xs={12}>
-        <Card>
-          <CardHeader
-            title="Recent Orders"
-            action={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  startIcon={<PrintIcon />}
-                  size="small"
-                  onClick={() => {
-                    if (orders.length > 0) {
-                      handleGenerateReceipt(orders[0]);
-                    }
-                  }}
-                  disabled={orders.length === 0}
-                >
-                  View Latest
-                </Button>
-                <IconButton onClick={handleRefresh} disabled={refreshing}>
-                  <RefreshIcon />
-                </IconButton>
-              </Box>
-            }
-          />
-          <Divider />
-          <CardContent sx={{ p: 0 }}>
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Order ID</TableCell>
-                    <TableCell>Table</TableCell>
-                    <TableCell>Waiter</TableCell>
-                    <TableCell>Items</TableCell>
-                    <TableCell>Total Amount</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>Time</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {orders.length > 0 ? (
-                    orders.slice(0, 10).map((order) => (
-                      <TableRow key={order.id}>
-                        <TableCell>#{order.id}</TableCell>
-                        <TableCell>{order.table_number}</TableCell>
-                        <TableCell>{order.waiter_name || 'N/A'}</TableCell>
-                        <TableCell>{order.items_count || '?'}</TableCell>
-                        <TableCell>${parseFloat(order.total_amount).toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={order.status || 'pending'}
-                            color={getStatusColor(order.status || 'pending')}
-                            size="small"
-                            sx={{ fontWeight: 'bold', minWidth: '80px', justifyContent: 'center' }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {new Date(order.created_at).toLocaleTimeString()}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Tooltip title="Update Status">
-                            <IconButton 
-                              size="small" 
-                              color="primary"
-                              onClick={() => handleUpdateOrderStatus(order)}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="View Receipt">
-                            <IconButton 
-                              size="small" 
-                              color="secondary"
-                              onClick={() => handleGenerateReceipt(order)}
-                            >
-                              <PrintIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={8} align="center">
-                        {loading ? (
-                          <CircularProgress size={24} sx={{ my: 1 }} />
-                        ) : (
-                          'No recent orders found'
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-      
-      {/* Order Status Update Dialog */}
-      <Dialog open={orderStatusDialog} onClose={() => setOrderStatusDialog(false)}>
-        <DialogTitle>
-          Update Order #{selectedOrder?.id}
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 2, minWidth: 300 }}>
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <FormControl fullWidth>
-                  <InputLabel>Order Status</InputLabel>
-                  <Select
-                    value={newStatus}
-                    onChange={handleStatusChange}
-                    label="Order Status"
-                  >
-                    <MenuItem value="pending">Pending</MenuItem>
-                    <MenuItem value="in-progress">In Progress</MenuItem>
-                    <MenuItem value="ready">Ready</MenuItem>
-                    <MenuItem value="completed">Completed</MenuItem>
-                    <MenuItem value="paid">Paid</MenuItem>
-                    <MenuItem value="cancelled">Cancelled</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-              
-              {(newStatus === 'paid' || newStatus === 'completed') && (
-                <Grid item xs={12}>
-                  <TextField
-                    fullWidth
-                    label="Payment Amount"
-                    value={paymentAmount}
-                    onChange={handlePaymentAmountChange}
-                    InputProps={{
-                      startAdornment: <InputAdornment position="start">Br</InputAdornment>,
-                    }}
-                  />
-                </Grid>
-              )}
-              
-              <Grid item xs={12}>
-                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
-                    Table: {selectedOrder?.table_number}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mx: 1 }}>
-                    •
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                    Waiter: {selectedOrder?.waiter_name || 'N/A'}
-                  </Typography>
-                </Box>
-              </Grid>
-            </Grid>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOrderStatusDialog(false)}>Cancel</Button>
-          <Button 
-            variant="contained" 
-            color="primary"
-            onClick={handleSubmitStatusUpdate}
-            startIcon={newStatus === 'paid' ? <PaymentIcon /> : <CheckCircleIcon />}
-          >
-            {newStatus === 'paid' ? 'Mark as Paid' : 'Update Status'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-      
-      {/* Snackbar for notifications */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={6000}
-        onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert 
-          onClose={handleCloseSnackbar} 
-          severity={snackbar.severity} 
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+      {renderOrdersTable()}
     </Box>
   );
-} 
+}

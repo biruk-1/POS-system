@@ -48,6 +48,38 @@ import {
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 
+// Add fetchOrdersData helper function
+const fetchOrdersData = async (token) => {
+  try {
+    const response = await axios.get('http://localhost:5001/api/orders', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    return [];
+  }
+};
+
+// Add fetchWaitersData helper function
+const fetchWaitersData = async (token) => {
+  try {
+    const response = await axios.get('http://localhost:5001/api/waiters', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching waiters:', error);
+    return [];
+  }
+};
+
 export default function AdminDashboard() {
   const theme = useTheme();
   const token = useSelector((state) => state.auth.token);
@@ -56,14 +88,14 @@ export default function AdminDashboard() {
   const [orders, setOrders] = useState([]);
   const [filteredOrders, setFilteredOrders] = useState([]);
   const [sales, setSales] = useState({
-    daily: [],
-    weekly: [],
-    monthly: [],
-    yearly: []
+    totalSales: 0,
+    completedOrders: 0,
+    waiterStats: []
   });
   const [selectedWaiter, setSelectedWaiter] = useState('all');
   const [waiters, setWaiters] = useState([]);
   const [timeRange, setTimeRange] = useState('daily');
+  const [socket, setSocket] = useState(null);
   
   // For order search
   const [searchTerm, setSearchTerm] = useState('');
@@ -86,21 +118,93 @@ export default function AdminDashboard() {
     severity: 'success'
   });
 
+  // Add fetchOrders function
+  const fetchOrders = async () => {
+    setLoading(true);
+    const data = await fetchOrdersData(token);
+    setOrders(data);
+    setFilteredOrders(data);
+    setLoading(false);
+  };
+
+  // Update socket connection setup
+  useEffect(() => {
+    // Connect to socket server with proper configuration
+    const newSocket = io('http://localhost:5001', {
+      withCredentials: true,
+      transports: ['websocket'],
+      auth: {
+        token
+      },
+      extraHeaders: {
+        'Access-Control-Allow-Origin': 'http://localhost:5173'
+      }
+    });
+
+    newSocket.on('connect', () => {
+      console.log('Admin connected to socket server');
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('Admin disconnected from socket server');
+    });
+
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+    });
+
+    setSocket(newSocket);
+
+    // Cleanup on unmount
+    return () => {
+      if (newSocket) {
+        newSocket.disconnect();
+      }
+    };
+  }, [token]);
+
+  // Add fetchWaiters function
+  const fetchWaiters = async () => {
+    const data = await fetchWaitersData(token);
+    setWaiters(data);
+  };
+
+  // Function to refresh all sales data
+  const refreshAllSalesData = () => {
+    console.log('Refreshing all sales data...');
+    fetchAdminSales();
+  };
+
   useEffect(() => {
     fetchWaiters();
     fetchOrders();
     
-    // Use the new function for sales
-    if (activeTab === 1) {
-      console.log("Initial fetch of sales data");
-      fetchSalesWithWaiter('all');
-    }
+    // Initial fetch of sales data with detailed logging
+    console.log('Initial component mount - fetching all sales data');
+    console.log('Current date:', new Date().toISOString());
+    console.log('Default time range:', timeRange);
+    
+    // Force refresh all sales data on component mount
+    refreshAllSalesData();
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Update filtered orders when either all orders, selected waiter, search term, or status filter changes
   useEffect(() => {
     if (orders.length > 0) {
       let filtered = [...orders];
+      
+      // Apply date range filter
+      if (dateRange.startDate) {
+        const startDate = new Date(dateRange.startDate);
+        startDate.setHours(0, 0, 0, 0);
+        filtered = filtered.filter(order => new Date(order.created_at) >= startDate);
+      }
+      
+      if (dateRange.endDate) {
+        const endDate = new Date(dateRange.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        filtered = filtered.filter(order => new Date(order.created_at) <= endDate);
+      }
       
       // Apply waiter filter
       if (selectedWaiter !== 'all') {
@@ -123,29 +227,107 @@ export default function AdminDashboard() {
         filtered = filtered.filter(order => order.status === statusFilter);
       }
       
-      // Apply date range filter
-      if (dateRange.startDate) {
-        const startDate = new Date(dateRange.startDate);
-        startDate.setHours(0, 0, 0, 0);
-        filtered = filtered.filter(order => new Date(order.created_at) >= startDate);
-      }
-      
-      if (dateRange.endDate) {
-        const endDate = new Date(dateRange.endDate);
-        endDate.setHours(23, 59, 59, 999);
-        filtered = filtered.filter(order => new Date(order.created_at) <= endDate);
-      }
-      
       setFilteredOrders(filtered);
     }
   }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
 
+  // Completely rewritten fetch sales function for admin
+  const fetchAdminSales = async () => {
+    try {
+      console.log('Fetching admin sales data');
+      setLoading(true);
+      
+      // Build query parameters
+      const params = {
+        waiter_id: selectedWaiter !== 'all' ? selectedWaiter : undefined,
+        _t: new Date().getTime() // Cache buster
+      };
+      
+      console.log('Fetching sales with params:', params);
+      
+      // Make API request to the admin-specific endpoint
+      const response = await axios.get(`http://localhost:5001/api/admin/sales/${timeRange}`, {
+        params,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('Sales response:', response.data);
+      
+      // Process the response data
+      const salesData = response.data[timeRange] || [];
+      
+      // Get the most recent data point (first in the array)
+      const latestData = salesData[0] || {
+        totalSales: 0,
+        completedOrders: 0,
+        waiters: []
+      };
+      
+      // Update state with new data
+      setSales({
+        totalSales: latestData.totalSales || 0,
+        completedOrders: latestData.completedOrders || 0,
+        waiterStats: (latestData.waiters || []).map(waiter => ({
+          waiter_id: waiter.waiter_id,
+          waiter_name: waiter.waiter_name || 'Unknown',
+          order_count: waiter.order_count || 0,
+          total_sales: waiter.total_sales || 0,
+          avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
+        }))
+      });
+      
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching admin sales:', error);
+      console.error('Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      
+      // Set empty state on error
+      setSales({
+        totalSales: 0,
+        completedOrders: 0,
+        waiterStats: []
+      });
+      
+      setSnackbar({
+        open: true,
+        message: `Failed to load sales data: ${error.message || 'Unknown error'}`,
+        severity: 'error'
+      });
+      
+      setLoading(false);
+    }
+  };
+
+  // Update useEffect to use new fetch function
+  useEffect(() => {
+    if (token) {
+      fetchWaiters();
+      fetchAdminSales();
+    }
+  }, [token, selectedWaiter, timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Socket.IO connection for real-time updates
   useEffect(() => {
-    const socket = io('http://localhost:5001');
+    const socket = io('http://localhost:5001', {
+      withCredentials: true,
+      transports: ['websocket'],
+      auth: {
+        token
+      },
+      extraHeaders: {
+        'Access-Control-Allow-Origin': 'http://localhost:5173'
+      }
+    });
     
     socket.on('connect', () => {
-      console.log('Admin connected to socket server');
+      console.log('Admin dashboard connected to socket server');
     });
     
     socket.on('connect_error', (error) => {
@@ -157,396 +339,45 @@ export default function AdminDashboard() {
       });
     });
     
-    // Function to refresh appropriate data based on current active tab
-    const refreshData = () => {
-      fetchOrders();
-      if (activeTab === 1) {
-        fetchSales();
-      }
-    };
-    
-    socket.on('order_created', (newOrder) => {
-      console.log('New order received:', newOrder);
-      refreshData();
-      
-      setSnackbar({
-        open: true,
-        message: `New order #${newOrder.id} has been created`,
-        severity: 'success'
-      });
-    });
-    
-    socket.on('order_status_updated', (updatedOrder) => {
-      console.log('Order status update received:', updatedOrder);
-      setOrders(prevOrders => 
-        prevOrders.map(order => 
-          order.id === updatedOrder.id ? 
-          { ...order, status: updatedOrder.status } : 
-          order
-        )
-      );
-      
-      // If an order was marked as completed or paid, refresh all sales data
-      if (updatedOrder.status === 'paid' || updatedOrder.status === 'completed') {
-        console.log('Order marked as completed/paid, refreshing all sales data');
-        fetchSales();
-        
-        // Show success notification
-        setSnackbar({
-          open: true,
-          message: `Order #${updatedOrder.id} completed - sales data updated`,
-          severity: 'success'
-        });
-      }
-    });
-    
-    // Listen for specific admin sales updates
+    // Listen for admin-specific sales updates
     socket.on('admin_sales_updated', (data) => {
       console.log('Admin sales update received:', data);
-      
-      // Refresh sales data for all time ranges to ensure consistent numbers
-      fetchSales();
-      
-      setSnackbar({
-        open: true,
-        message: `Sales data updated - order #${data.order_id || 'unknown'}`,
-        severity: 'info'
-      });
+      fetchAdminSales();
     });
     
-    socket.on('order_updated', (updatedOrder) => {
-      console.log('Order updated received:', updatedOrder);
-      refreshData();
-      
-      setSnackbar({
-        open: true,
-        message: `Order #${updatedOrder.id} has been updated`,
-        severity: 'info'
-      });
-    });
-    
-    socket.on('order_deleted', (deletedOrder) => {
-      console.log('Order deleted received:', deletedOrder);
-      refreshData();
-      
-      setSnackbar({
-        open: true,
-        message: `Order #${deletedOrder.id} has been deleted`,
-        severity: 'info'
-      });
+    // Listen for general sales updates
+    socket.on('sales_data_updated', () => {
+      console.log('Sales data update received, refreshing');
+      fetchAdminSales();
     });
     
     return () => {
       socket.disconnect();
     };
-  }, [activeTab, token]);
-
-  // Re-fetch sales data when waiter selection changes
-  useEffect(() => {
-    if (activeTab === 1) { // Only if we're on the sales tab
-      fetchSales();
-    }
-  }, [selectedWaiter, timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchWaiters = async () => {
-    try {
-      const response = await axios.get('http://localhost:5001/api/waiters', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setWaiters(response.data);
-    } catch (error) {
-      console.error('Error fetching waiters:', error);
-    }
-  };
-
-  const fetchOrders = async () => {
-      try {
-        setLoading(true);
-      const response = await axios.get('http://localhost:5001/api/orders', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setOrders(response.data);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error fetching orders:', error);
-      setLoading(false);
-    }
-  };
-
-  const fetchSales = async () => {
-    // Just delegate to our new function for consistency
-    return fetchSalesWithWaiter(selectedWaiter);
-  };
-  
-  const fetchOrderDetails = async (orderId) => {
-    try {
-      const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      setCurrentOrder(response.data);
-      setOrderItems(response.data.items || []);
-      setEditedOrder({
-        ...response.data,
-        items: [...response.data.items || []]
-      });
-      
-      setEditDialogOpen(true);
-    } catch (error) {
-      console.error('Error fetching order details:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to load order details',
-        severity: 'error'
-      });
-    }
-  };
-
-  const handleEditOrder = (orderId) => {
-    fetchOrderDetails(orderId);
-  };
-  
-  const handleDeleteOrder = async (orderId) => {
-    if (!window.confirm('Are you sure you want to delete this order? This action cannot be undone.')) {
-      return;
-    }
-    
-    try {
-      await axios.delete(`http://localhost:5001/api/orders/${orderId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      // Update local state
-      setOrders(orders.filter(order => order.id !== orderId));
-      
-      setSnackbar({
-        open: true,
-        message: 'Order deleted successfully',
-        severity: 'success'
-      });
-    } catch (error) {
-      console.error('Error deleting order:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to delete order',
-        severity: 'error'
-      });
-    }
-  };
-  
-  const handleRemoveItem = (itemId) => {
-    setEditedOrder({
-      ...editedOrder,
-      items: editedOrder.items.filter(item => item.id !== itemId)
-    });
-  };
-  
-  const handleUpdateItem = (itemId, field, value) => {
-    setEditedOrder({
-      ...editedOrder,
-      items: editedOrder.items.map(item => 
-        item.id === itemId ? { ...item, [field]: value } : item
-      )
-    });
-  };
-  
-  const handleSaveOrder = async () => {
-    try {
-      // Calculate new total based on current items
-      const newTotal = editedOrder.items.reduce(
-        (sum, item) => sum + (item.price * item.quantity), 
-        0
-      );
-      
-      // Update order with new total and items
-      await axios.put(`http://localhost:5001/api/orders/${editedOrder.id}`, {
-        items: editedOrder.items,
-        total_amount: newTotal,
-        status: editedOrder.status
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      // Close dialog and refetch all orders
-      setEditDialogOpen(false);
-      fetchOrders();
-      
-      setSnackbar({
-        open: true,
-        message: 'Order updated successfully',
-        severity: 'success'
-      });
-      } catch (error) {
-      console.error('Error updating order:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to update order',
-        severity: 'error'
-      });
-    }
-  };
+  }, [timeRange, selectedWaiter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleTabChange = (event, newValue) => {
     console.log(`Switching to tab ${newValue} from ${activeTab}`);
     setActiveTab(newValue);
     
-    // If switching to sales tab, refresh sales data with current waiter filter
+    // If switching to sales tab, force refresh all sales data
     if (newValue === 1) {
-      console.log(`Tab changed to Sales, fetching data with current waiter: ${selectedWaiter}`);
-      fetchSalesWithWaiter(selectedWaiter);
+      console.log(`Tab changed to Sales, forcing refresh of all sales data`);
+      console.log('Current time:', new Date().toISOString());
+      console.log('Selected waiter:', selectedWaiter);
+      console.log('Time range:', timeRange);
+      
+      // Use the refreshAllSalesData function for a consistent approach
+      refreshAllSalesData();
     }
   };
 
   const handleWaiterFilter = (event) => {
-    const newWaiterId = event.target.value;
-    console.log(`Setting selected waiter to: ${newWaiterId}`);
-    
-    // Immediately fetch with the new value instead of using state
-    if (activeTab === 1) {
-      fetchSalesWithWaiter(newWaiterId);
-    }
-    
-    // Then update the state for UI and other components
-    setSelectedWaiter(newWaiterId);
-  };
-
-  // New function to fetch sales with a specific waiter
-  const fetchSalesWithWaiter = async (waiterId, customTimeRange = null) => {
-    try {
-      // Use the passed timeRange if provided, otherwise use state
-      const timeRangeToUse = customTimeRange || timeRange;
-      
-      console.log(`Fetching sales data for time range: ${timeRangeToUse}, waiter: ${waiterId}`);
-      
-      // Show loading state
-      setLoading(true);
-      
-      // Use different endpoints for daily vs other time ranges
-      const endpoint = timeRangeToUse === 'daily' 
-        ? 'http://localhost:5001/api/sales/daily'
-        : `http://localhost:5001/api/sales/${timeRangeToUse}`;
-      
-      const params = { 
-        waiter_id: waiterId,
-        _t: new Date().getTime()  // Cache buster
-      };
-      
-      const response = await axios.get(endpoint, {
-        headers: { Authorization: `Bearer ${token}` },
-        params
-      });
-      
-      console.log(`Received response for waiter ${waiterId}:`, response.data);
-      
-      // Handle the response based on the time range
-      if (timeRangeToUse === 'daily') {
-        // Process daily sales data
-        const salesData = {
-          totalSales: response.data.totalSales || 0,
-          completedOrders: response.data.completedOrders || 0,
-          waiterStats: response.data.waiterStats || []
-        };
-        
-        // Map the data to match the expected format
-        const processedData = [{
-          date: new Date().toISOString().split('T')[0],
-          totalSales: salesData.totalSales,
-          completedOrders: salesData.completedOrders,
-          waiters: salesData.waiterStats.map(stat => ({
-            waiter_id: stat.waiter_id,
-            waiter_name: stat.waiter_name,
-            order_count: parseInt(stat.order_count || 0),
-            total_sales: parseFloat(stat.total_sales || 0)
-          }))
-        }];
-        
-        setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: processedData }));
-      } else {
-        // For weekly, monthly, and yearly views
-        const timeRangeData = response.data[timeRangeToUse] || [];
-        
-        if (timeRangeData.length === 0) {
-          console.log(`No sales data returned for ${timeRangeToUse} with waiter: ${waiterId}`);
-          
-          // Create default entries with zero values
-          if (waiterId === 'all') {
-            if (waiters.length > 0) {
-              const defaultEntry = {
-                date: new Date().toISOString().split('T')[0],
-                totalSales: 0,
-                completedOrders: 0,
-                waiters: waiters.map(waiter => ({
-                  waiter_id: waiter.id,
-                  waiter_name: waiter.username,
-                  order_count: 0,
-                  total_sales: 0
-                }))
-              };
-              
-              setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: [defaultEntry] }));
-            }
-          } else {
-            const selectedWaiter = waiters.find(w => w.id === parseInt(waiterId));
-            if (selectedWaiter) {
-              const defaultEntry = {
-                date: new Date().toISOString().split('T')[0],
-                totalSales: 0,
-                completedOrders: 0,
-                waiters: [{
-                  waiter_id: selectedWaiter.id,
-                  waiter_name: selectedWaiter.username,
-                  order_count: 0,
-                  total_sales: 0
-                }]
-              };
-              
-              setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: [defaultEntry] }));
-            }
-          }
-        } else {
-          // Process and store the data
-          setSales(prevSales => ({ ...prevSales, [timeRangeToUse]: timeRangeData }));
-        }
-      }
-    } catch (error) {
-      console.error(`Error fetching sales for waiter ${waiterId}:`, error);
-      
-      const timeRangeToUse = customTimeRange || timeRange;
-      
-      // Set error state with appropriate format
-      setSales(prevSales => ({ 
-        ...prevSales, 
-        [timeRangeToUse]: [{
-          date: new Date().toISOString().split('T')[0],
-          totalSales: 0,
-          completedOrders: 0,
-          waiters: [{
-            waiter_id: 0,
-            waiter_name: "Error Loading Data",
-            order_count: 0,
-            total_sales: 0
-          }]
-        }]
-      }));
-      
-      setSnackbar({
-        open: true,
-        message: 'Failed to load sales data',
-        severity: 'error'
-      });
-    } finally {
-      setLoading(false);
-    }
+    setSelectedWaiter(event.target.value);
   };
 
   const handleTimeRangeChange = (event) => {
-    const newTimeRange = event.target.value;
-    setTimeRange(newTimeRange);
-    
-    // Immediately fetch data with the new time range
-    if (activeTab === 1) {
-      fetchSalesWithWaiter(selectedWaiter, newTimeRange);
-    }
+    setTimeRange(event.target.value);
   };
 
   const handleSearchChange = (event) => {
@@ -641,23 +472,149 @@ export default function AdminDashboard() {
   };
   
   const handleRefreshSales = () => {
-    console.log(`Manually refreshing sales data with waiter: ${selectedWaiter}`);
-    fetchSalesWithWaiter(selectedWaiter)
-      .then(() => {
+    console.log('Manually refreshing admin sales data');
+    fetchAdminSales();
+  };
+
+  // Order editing functions
+  const handleEditOrder = (orderId) => {
+    console.log('Editing order:', orderId);
+    // Find the order to edit
+    const orderToEdit = orders.find(order => order.id === orderId);
+    
+    if (orderToEdit) {
+      // Set the current order and make a copy for editing
+      setCurrentOrder(orderToEdit);
+      setEditedOrder({...orderToEdit});
+      setEditDialogOpen(true);
+    } else {
+      setSnackbar({
+        open: true,
+        message: `Order #${orderId} not found`,
+        severity: 'error'
+      });
+    }
+  };
+
+  const handleUpdateItem = (itemId, field, value) => {
+    if (!editedOrder) return;
+    
+    // Update the item in the edited order
+    const updatedItems = editedOrder.items.map(item => 
+      item.id === itemId ? {...item, [field]: value} : item
+    );
+    
+    setEditedOrder({
+      ...editedOrder,
+      items: updatedItems
+    });
+  };
+
+  const handleRemoveItem = (itemId) => {
+    if (!editedOrder) return;
+    
+    // Remove the item from the edited order
+    const updatedItems = editedOrder.items.filter(item => item.id !== itemId);
+    
+    setEditedOrder({
+      ...editedOrder,
+      items: updatedItems
+    });
+  };
+
+  const handleSaveOrder = async () => {
+    if (!editedOrder) return;
+    
+    try {
+      setLoading(true);
+      
+      // Calculate the new total amount
+      const totalAmount = editedOrder.items.reduce(
+        (sum, item) => sum + (item.price * item.quantity), 0
+      );
+      
+      // Prepare the update payload
+      const updateData = {
+        ...editedOrder,
+        total_amount: totalAmount
+      };
+      
+      // Make the API request to update the order
+      const response = await axios.put(
+        `http://localhost:5001/api/orders/${editedOrder.id}`, 
+        updateData,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (response.data) {
+        // Close the dialog
+        setEditDialogOpen(false);
+        
+        // Refresh the orders list
+        fetchOrders();
+        
+        // Show success message
         setSnackbar({
           open: true,
-          message: 'Sales data refreshed successfully',
+          message: `Order #${editedOrder.id} updated successfully`,
           severity: 'success'
         });
-      })
-      .catch((error) => {
-        console.error('Error refreshing sales:', error);
-        setSnackbar({
-          open: true,
-          message: 'Failed to refresh sales data',
-          severity: 'error'
-        });
+      }
+    } catch (error) {
+      console.error('Error updating order:', error);
+      
+      setSnackbar({
+        open: true,
+        message: `Failed to update order: ${error.message || 'Unknown error'}`,
+        severity: 'error'
       });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteOrder = async (orderId) => {
+    // Confirm deletion with the user
+    if (!window.confirm(`Are you sure you want to delete Order #${orderId}? This action cannot be undone.`)) {
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Make the API request to delete the order
+      await axios.delete(`http://localhost:5001/api/orders/${orderId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Refresh the orders list
+      fetchOrders();
+      
+      // Show success message
+      setSnackbar({
+        open: true,
+        message: `Order #${orderId} deleted successfully`,
+        severity: 'success'
+      });
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      
+      setSnackbar({
+        open: true,
+        message: `Failed to delete order: ${error.message || 'Unknown error'}`,
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const renderOrdersTab = () => (
@@ -866,72 +823,20 @@ export default function AdminDashboard() {
   );
 
   const renderSalesTab = () => {
-    // Get the current sales data
-    const currentSales = sales[timeRange] || [];
+    // Sort waiters by total sales
+    const sortedWaiters = [...sales.waiterStats].sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
     
-    // Process the sales data based on time range
-    let processedSales = [];
-    let totalSales = 0;
-    let totalOrders = 0;
-    
-    if (timeRange === 'daily' && currentSales.length > 0) {
-      // For daily view, process waiters array
-      processedSales = currentSales[0].waiters.map(waiter => ({
-        waiter_id: waiter.waiter_id,
-        waiter_name: waiter.waiter_name,
-        order_count: waiter.order_count,
-        total_sales: waiter.total_sales,
-        avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
-      }));
-      totalSales = currentSales[0].totalSales;
-      totalOrders = currentSales[0].completedOrders;
-    } else {
-      // For weekly, monthly, and yearly views
-      // Aggregate data for each waiter across all dates
-      const waiterTotals = {};
-      
-      currentSales.forEach(dateData => {
-        // Add to total sales and orders
-        totalSales += parseFloat(dateData.totalSales || 0);
-        totalOrders += parseInt(dateData.completedOrders || 0);
-        
-        // Process each waiter's data
-        dateData.waiters.forEach(waiter => {
-          if (!waiterTotals[waiter.waiter_id]) {
-            waiterTotals[waiter.waiter_id] = {
-              waiter_id: waiter.waiter_id,
-              waiter_name: waiter.waiter_name,
-              order_count: 0,
-              total_sales: 0
-            };
-          }
-          
-          waiterTotals[waiter.waiter_id].order_count += parseInt(waiter.order_count || 0);
-          waiterTotals[waiter.waiter_id].total_sales += parseFloat(waiter.total_sales || 0);
-        });
-      });
-      
-      // Convert waiter totals to array and calculate average order values
-      processedSales = Object.values(waiterTotals).map(waiter => ({
-        ...waiter,
-        avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
-      }));
-    }
-    
-    // Sort sales data by total_sales in descending order
-    const sortedSales = processedSales.sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
-    
-    // Create a rank map for quick lookup
+    // Create rank map
     const rankMap = {};
-    sortedSales.forEach((sale, index) => {
-      rankMap[sale.waiter_id] = index + 1;
+    sortedWaiters.forEach((waiter, index) => {
+      rankMap[waiter.waiter_id] = index + 1;
     });
     
     return (
       <Box>
         <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Typography variant="h6">Sales Tracking</Typography>
+            <Typography variant="h6">Admin Sales Overview</Typography>
             <IconButton
               color="primary"
               onClick={handleRefreshSales}
@@ -950,10 +855,10 @@ export default function AdminDashboard() {
                 label="Time Range"
                 disabled={loading}
               >
-                <MenuItem value="daily">Daily</MenuItem>
-                <MenuItem value="weekly">Weekly</MenuItem>
-                <MenuItem value="monthly">Monthly</MenuItem>
-                <MenuItem value="yearly">Yearly</MenuItem>
+                <MenuItem value="daily">Today</MenuItem>
+                <MenuItem value="weekly">Last 7 Days</MenuItem>
+                <MenuItem value="monthly">Last 30 Days</MenuItem>
+                <MenuItem value="yearly">Last 365 Days</MenuItem>
               </Select>
             </FormControl>
             <FormControl sx={{ minWidth: 200 }}>
@@ -986,101 +891,117 @@ export default function AdminDashboard() {
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="body2" color="text.secondary">Total Sales</Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(totalSales)}
+                    {formatCurrency(sales.totalSales)}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="body2" color="text.secondary">Orders Completed</Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {totalOrders}
+                    {sales.completedOrders}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="body2" color="text.secondary">Average Order Value</Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(totalOrders > 0 ? totalSales / totalOrders : 0)}
+                    {formatCurrency(sales.completedOrders > 0 ? sales.totalSales / sales.completedOrders : 0)}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="body2" color="text.secondary">Time Period</Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
                     {timeRange === 'daily' ? 'Today' : 
-                     timeRange === 'weekly' ? 'This Week' : 
-                     timeRange === 'monthly' ? 'This Month' : 'This Year'}
+                     timeRange === 'weekly' ? 'Last 7 Days' : 
+                     timeRange === 'monthly' ? 'Last 30 Days' : 'Last 365 Days'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Last updated: {new Date().toLocaleTimeString()}
                   </Typography>
                 </Grid>
               </Grid>
             </Paper>
 
+            {sortedWaiters.length === 0 && (
+              <Box sx={{ textAlign: 'center', py: 4, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
+                <Typography variant="h6" color="text.secondary" gutterBottom>
+                  No sales data available for this period
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  This could be because:
+                  <br />1. There are no completed orders in this time period
+                  <br />2. The selected waiter has no sales
+                  <br />3. The data hasn't been loaded correctly
+                </Typography>
+                <Button 
+                  variant="contained" 
+                  color="primary" 
+                  sx={{ mt: 2 }}
+                  onClick={handleRefreshSales}
+                  startIcon={<RefreshIcon />}
+                >
+                  Refresh Data
+                </Button>
+              </Box>
+            )}
+
             <Grid container spacing={3}>
-              {sortedSales.length > 0 ? (
-                sortedSales.map((sale) => (
-                  <Grid item xs={12} sm={6} md={4} key={sale.waiter_id || 'sale-' + Math.random()}>
-                    <Paper 
-                      sx={{
-                        p: 3, 
-                        borderTop: `4px solid ${theme.palette.primary.main}`,
-                        boxShadow: 2,
-                        height: '100%',
-                        display: 'flex',
-                        flexDirection: 'column'
-                      }}
-                    >
-                      <Typography variant="h6" gutterBottom color="text.primary">
-                        {sale.waiter_name || 'Unknown'}
-                      </Typography>
-                      <Typography variant="h4" color="primary" sx={{ fontWeight: 'bold' }}>
-                        {formatCurrency(sale.total_sales || 0)}
-                      </Typography>
-                      
-                      <Box sx={{ mt: 2, mb: 1 }}>
-                        <Divider />
-                      </Box>
-                      
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
-                        <Typography variant="body1" color="text.secondary">
-                          Total Orders:
-                        </Typography>
-                        <Typography variant="body1" fontWeight="bold">
-                          {sale.order_count || 0}
-                        </Typography>
-                      </Box>
-                      
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
-                        <Typography variant="body1" color="text.secondary">
-                          Avg. Order:
-                        </Typography>
-                        <Typography variant="body1" fontWeight="bold">
-                          {formatCurrency(sale.avgOrder || 0)}
-                        </Typography>
-                      </Box>
-                      
-                      <Box sx={{ 
-                        mt: 'auto', 
-                        pt: 2,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <Chip
-                          label={`Rank: ${rankMap[sale.waiter_id] || 'N/A'}`}
-                          color="primary"
-                          size="small"
-                          sx={{ fontWeight: 'bold' }}
-                        />
-                      </Box>
-                    </Paper>
-                  </Grid>
-                ))
-              ) : (
-                <Grid item xs={12}>
-                  <Paper sx={{ p: 3, textAlign: 'center' }}>
-                    <Typography variant="h6" color="text.secondary">
-                      No sales data available for this period
+              {sortedWaiters.map((waiter) => (
+                <Grid item xs={12} sm={6} md={4} key={waiter.waiter_id}>
+                  <Paper 
+                    sx={{
+                      p: 3, 
+                      borderTop: `4px solid ${theme.palette.primary.main}`,
+                      boxShadow: 2,
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column'
+                    }}
+                  >
+                    <Typography variant="h6" gutterBottom color="text.primary">
+                      {waiter.waiter_name}
                     </Typography>
+                    <Typography variant="h4" color="primary" sx={{ fontWeight: 'bold' }}>
+                      {formatCurrency(waiter.total_sales)}
+                    </Typography>
+                    
+                    <Box sx={{ mt: 2, mb: 1 }}>
+                      <Divider />
+                    </Box>
+                    
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
+                      <Typography variant="body1" color="text.secondary">
+                        Total Orders:
+                      </Typography>
+                      <Typography variant="body1" fontWeight="bold">
+                        {waiter.order_count}
+                      </Typography>
+                    </Box>
+                    
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+                      <Typography variant="body1" color="text.secondary">
+                        Avg. Order:
+                      </Typography>
+                      <Typography variant="body1" fontWeight="bold">
+                        {formatCurrency(waiter.avgOrder)}
+                      </Typography>
+                    </Box>
+                    
+                    <Box sx={{ 
+                      mt: 'auto', 
+                      pt: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      <Chip
+                        label={`Rank: ${rankMap[waiter.waiter_id]}`}
+                        color="primary"
+                        size="small"
+                        sx={{ fontWeight: 'bold' }}
+                      />
+                    </Box>
                   </Paper>
                 </Grid>
-              )}
+              ))}
             </Grid>
           </>
         )}

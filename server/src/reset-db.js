@@ -137,12 +137,14 @@ function initializeDatabase() {
     db.run(`CREATE TABLE IF NOT EXISTS sales_reports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       date DATE NOT NULL,
-      total_sales REAL NOT NULL,
-      food_items_count INTEGER NOT NULL,
-      drink_items_count INTEGER NOT NULL,
-      created_by INTEGER,
+      waiter_id INTEGER NOT NULL,
+      order_id INTEGER NOT NULL UNIQUE,
+      total_amount REAL NOT NULL,
+      food_items_count INTEGER NOT NULL DEFAULT 0,
+      drink_items_count INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (created_by) REFERENCES users (id)
+      FOREIGN KEY (waiter_id) REFERENCES users (id),
+      FOREIGN KEY (order_id) REFERENCES orders (id)
     )`, (err) => {
       if (err) console.error('Error creating sales_reports table:', err);
       else console.log('Sales reports table created successfully.');

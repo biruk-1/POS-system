@@ -84,7 +84,16 @@ export default function CashierSales() {
 
   // Socket.IO connection for real-time updates
   useEffect(() => {
-    const socket = io('http://localhost:5001');
+    const socket = io('http://localhost:5001', {
+      withCredentials: true,
+      transports: ['websocket'],
+      auth: {
+        token
+      },
+      extraHeaders: {
+        'Access-Control-Allow-Origin': 'http://localhost:5173'
+      }
+    });
     
     socket.on('connect', () => {
       console.log('Cashier Sales connected to socket server');
@@ -124,7 +133,7 @@ export default function CashierSales() {
     return () => {
       socket.disconnect();
     };
-  }, [selectedDate, selectedWaiter]);
+  }, [selectedDate, selectedWaiter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchWaiters = async () => {
     try {

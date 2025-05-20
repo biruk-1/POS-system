@@ -200,7 +200,7 @@ export default function OrderEntry() {
       setError('Please select a waiter');
       return;
     }
-    
+
     try {
       const orderData = {
         items: cart.map(item => ({
@@ -210,7 +210,8 @@ export default function OrderEntry() {
           item_type: item.item_type
         })),
         total_amount: parseFloat(calculateTotal()),
-        waiter_id: waiterId
+        waiter_id: waiterId,
+        status: 'pending' // Set initial status
       };
       
       console.log('Placing order with data:', orderData);
@@ -219,11 +220,11 @@ export default function OrderEntry() {
       
       if (navigator.onLine) {
         // Online mode - send to server
-      const response = await axios.post('http://localhost:5001/api/orders', orderData, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
+        const response = await axios.post('http://localhost:5001/api/orders', orderData, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
       
         console.log('Order created:', response.data);
         orderId = response.data.id;
@@ -233,9 +234,6 @@ export default function OrderEntry() {
         orderId = offlineOrder.id;
       }
       
-      // Generate and print receipts
-      await handlePrintReceipts(orderId);
-      
       setSuccess(isOffline ? 
         'Order saved in offline mode. It will sync when back online.' : 
         'Order placed successfully!');
@@ -243,132 +241,20 @@ export default function OrderEntry() {
       // Clear the cart and reset fields
       setCart([]);
       
-      // Keep the same waiter selected for convenience
-      // setWaiterId('');
-      
-    } catch (err) {
-      console.error('Failed to place order:', err);
-      setError('Failed to place order: ' + (err.response?.data?.error || err.message));
-    }
-  };
-  
-  // Update the handlePrintReceipts function to use the cart data for new orders
-  const handlePrintReceipts = async (orderId) => {
-    try {
-      // For a newly created order, we'll use the cart data directly
-      // since the order items might not be immediately available from the API
-      
-      // Separate items into food and drinks
-      const foodItems = cart.filter(item => item.item_type === 'food');
-      const drinkItems = cart.filter(item => item.item_type === 'drink');
-      
-      // Print kitchen receipt if there are food items
-      if (foodItems.length > 0) {
-        const kitchenReceipt = {
-          type: 'kitchen',
-          items: foodItems,
-          orderId: orderId,
-          timestamp: new Date().toISOString(),
-          waiterId: waiterId,
-          waiterName: waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown'
-        };
-        
-        // Print kitchen receipt - in real system this would go to the kitchen printer
-        console.log('Printing kitchen receipt:', kitchenReceipt);
-        
-        // Format kitchen receipt for display
-        let kitchenContent = `KITCHEN ORDER: #${orderId}\n`;
-        kitchenContent += `--------------------------------\n`;
-        kitchenContent += `Time: ${new Date().toLocaleTimeString()}\n`;
-        kitchenContent += `Waiter: ${kitchenReceipt.waiterName}\n`;
-        kitchenContent += `--------------------------------\n\n`;
-        
-        foodItems.forEach(item => {
-          kitchenContent += `${item.quantity}x ${item.name}\n`;
-        });
-        
-        kitchenContent += `\n--------------------------------\n`;
-        
-        // Show kitchen receipt in alert
-        alert(kitchenContent);
-        
-        await printReceipt(kitchenReceipt);
-      }
-      
-      // Print barman receipt if there are drink items
-      if (drinkItems.length > 0) {
-        const barmanReceipt = {
-          type: 'barman',
-          items: drinkItems,
-          orderId: orderId,
-          timestamp: new Date().toISOString(),
-          waiterId: waiterId,
-          waiterName: waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown'
-        };
-        
-        // Print bar receipt - in real system this would go to the bar printer
-        console.log('Printing bar receipt:', barmanReceipt);
-        
-        // Format bar receipt for display
-        let barContent = `BAR ORDER: #${orderId}\n`;
-        barContent += `--------------------------------\n`;
-        barContent += `Time: ${new Date().toLocaleTimeString()}\n`;
-        barContent += `Waiter: ${barmanReceipt.waiterName}\n`;
-        barContent += `--------------------------------\n\n`;
-        
-        drinkItems.forEach(item => {
-          barContent += `${item.quantity}x ${item.name}\n`;
-        });
-        
-        barContent += `\n--------------------------------\n`;
-        
-        // Show bar receipt in alert
-        alert(barContent);
-        
-        await printReceipt(barmanReceipt);
-      }
-      
+      // Navigate back to dashboard to show the updated order
+      setTimeout(() => {
+        navigate('/cashier/dashboard');
+      }, 1500);
     } catch (error) {
-      console.error('Error printing receipts:', error);
-      setError('Failed to print receipts');
+      console.error('Error placing order:', error);
+      setError('Failed to place order: ' + (error.response?.data?.error || error.message));
     }
   };
   
-  // Modify printReceipt to support offline mode
-  const printReceipt = async (receiptData) => {
-    try {
-      if (navigator.onLine) {
-        const response = await axios.post('http://localhost:5001/api/print-receipt', receiptData, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-        
-        if (response.data.success) {
-          console.log(`${receiptData.type} receipt printed successfully`);
-        } else {
-          throw new Error('Failed to print receipt');
-        }
-      } else {
-        // Store receipt offline
-        offlineService.saveReceiptOffline(receiptData);
-        console.log(`${receiptData.type} receipt saved offline`);
-      }
-    } catch (error) {
-      console.error(`Error printing ${receiptData.type} receipt:`, error);
-      throw error;
-    }
-  };
-  
-  // Filter items based on active tab
-  const filteredItems = activeTab === 'all' 
-    ? items 
-    : items.filter(item => item.item_type === activeTab);
-  
-  // Add handlePrintOrder function
+  // Update handlePrintOrder function
   const handlePrintOrder = async () => {
     if (cart.length === 0) {
-      setError('Cart is empty. Please add items to print an order.');
+      setError('Cart is empty. Please add items to your order.');
       return;
     }
     
@@ -378,139 +264,196 @@ export default function OrderEntry() {
     }
 
     try {
-      // Separate items into food and drinks
-      const foodItems = cart.filter(item => item.item_type === 'food');
-      const drinkItems = cart.filter(item => item.item_type === 'drink');
-
-      if (foodItems.length === 0 && drinkItems.length === 0) {
-        setError('Cart must contain at least one food or drink item');
-        return;
-      }
-
-      const orderId = `draft-${Date.now()}`; // Create a temporary ID for draft orders
-      const waiterName = waiters.find(w => w.id === parseInt(waiterId))?.username || 'Unknown';
-      
-      // Store the complete order data in localStorage
+      // First place the order
       const orderData = {
-        foodItems,
-        drinkItems,
-        orderId,
-        timestamp: new Date().toISOString(),
-        waiterId,
-        waiterName,
-        isDraft: true
+        items: cart.map(item => ({
+          item_id: item.id,
+          quantity: item.quantity,
+          price: item.price,
+          item_type: item.item_type
+        })),
+        total_amount: parseFloat(calculateTotal()),
+        waiter_id: waiterId,
+        status: 'pending' // Set initial status
       };
       
-      // Save the order data for the OrderTicket component to use
-      localStorage.setItem('order_data', JSON.stringify(orderData));
+      console.log('Placing order with data for kitchen/bar printing:', orderData);
       
-      // Only make API calls when online - and only do it once in the background
-      // This makes the navigation to OrderTicket much faster
+      let orderId;
+      let placedOrder;
+      
+      // Use the same API endpoint as handlePlaceOrder
       if (navigator.onLine) {
-        // Save data to server in background without blocking
-        setTimeout(() => {
-          const saveTicketsToServer = async () => {
-            try {
-              // Save kitchen ticket if there are food items
-              if (foodItems.length > 0) {
-                await axios.post('http://localhost:5001/api/print-receipt', {
-                  type: 'kitchen',
-                  items: foodItems,
-                  orderId,
-                  timestamp: new Date().toISOString(),
-                  waiterId,
-                  waiterName,
-                  isDraft: true
-                }, {
-                  headers: {
-                    Authorization: `Bearer ${token}`
-                  }
-                });
-              }
-              
-              // Save bar ticket if there are drink items
-              if (drinkItems.length > 0) {
-                await axios.post('http://localhost:5001/api/print-receipt', {
-                  type: 'barman',
-                  items: drinkItems,
-                  orderId,
-                  timestamp: new Date().toISOString(),
-                  waiterId,
-                  waiterName,
-                  isDraft: true
-                }, {
-                  headers: {
-                    Authorization: `Bearer ${token}`
-                  }
-                });
-              }
-              console.log('Successfully saved tickets to server in background');
-            } catch (err) {
-              console.error('Background saving of tickets failed:', err);
-              // Store in offline service for later sync
-              if (foodItems.length > 0) {
-                offlineService.saveReceiptOffline({
-                  type: 'kitchen',
-                  items: foodItems,
-                  orderId,
-                  timestamp: new Date().toISOString(),
-                  waiterId,
-                  waiterName,
-                  isDraft: true
-                });
-              }
-              
-              if (drinkItems.length > 0) {
-                offlineService.saveReceiptOffline({
-                  type: 'barman',
-                  items: drinkItems,
-                  orderId,
-                  timestamp: new Date().toISOString(),
-                  waiterId,
-                  waiterName,
-                  isDraft: true
-                });
-              }
-            }
-          };
-          
-          saveTicketsToServer();
-        }, 100);
+        // Online mode - send to server
+        const response = await axios.post('http://localhost:5001/api/orders', orderData, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+      
+        console.log('Order created for kitchen/bar printing:', response.data);
+        orderId = response.data.id;
+        placedOrder = response.data;
       } else {
-        // Store receipts offline
-        if (foodItems.length > 0) {
-          offlineService.saveReceiptOffline({
-            type: 'kitchen',
-            items: foodItems,
-            orderId,
-            timestamp: new Date().toISOString(),
-            waiterId,
-            waiterName,
-            isDraft: true
-          });
-        }
-        
-        if (drinkItems.length > 0) {
-          offlineService.saveReceiptOffline({
-            type: 'barman',
-            items: drinkItems,
-            orderId,
-            timestamp: new Date().toISOString(),
-            waiterId,
-            waiterName,
-            isDraft: true
-          });
-        }
+        // Offline mode - save locally
+        const offlineOrder = offlineService.saveOrderOffline(orderData);
+        orderId = offlineOrder.id;
+        placedOrder = offlineOrder;
       }
       
-      // Navigate to the ticket page immediately without waiting for API calls
-      navigate('/cashier/order-ticket');
+      // Print kitchen and bar tickets
+      printKitchenAndBarTickets(placedOrder);
       
+      setSuccess('Order placed and sent to kitchen/bar');
+      
+      // Clear the cart after successful order
+      setCart([]);
+      
+      // Navigate back to dashboard to show the updated order list
+      setTimeout(() => {
+        navigate('/cashier/dashboard');
+      }, 1500);
     } catch (error) {
-      console.error('Error preparing order ticket:', error);
-      setError('Failed to prepare order ticket: ' + (error.response?.data?.error || error.message));
+      console.error('Error placing order for kitchen/bar:', error);
+      setError('Failed to create order for kitchen/bar: ' + (error.response?.data?.error || error.message));
     }
   };
+  
+  // Function to print kitchen and bar tickets separately
+  const printKitchenAndBarTickets = (order) => {
+    // Separate items by type
+    const foodItems = order.items.filter(item => item.item_type === 'food');
+    const drinkItems = order.items.filter(item => item.item_type === 'drink');
+    
+    // Only print kitchen ticket if there are food items
+    if (foodItems.length > 0) {
+      printTicket(order, foodItems, 'KITCHEN');
+    }
+    
+    // Only print bar ticket if there are drink items
+    if (drinkItems.length > 0) {
+      printTicket(order, drinkItems, 'BAR');
+    }
+    
+    // After printing kitchen/bar tickets, redirect to receipt page
+    setTimeout(() => {
+      navigate(`/cashier/receipt/${order.id}`);
+    }, 500);
+  };
+  
+  // Function to print a specific ticket
+  const printTicket = (order, items, ticketType) => {
+    const printWindow = window.open('', '_blank', 'width=300,height=600');
+    if (!printWindow) {
+      alert(`Please allow pop-ups to print ${ticketType.toLowerCase()} ticket`);
+      return;
+    }
+    
+    // Add the content to the new window
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>${ticketType} Ticket #${order.id}</title>
+          <style>
+            @page {
+              size: 58mm 120mm;
+              margin: 0;
+            }
+            body {
+              font-family: 'Courier New', monospace;
+              margin: 0;
+              padding: 4mm 2mm;
+              width: 58mm;
+            }
+            .ticket {
+              text-align: center;
+              padding: 2mm;
+            }
+            .header {
+              font-size: 14pt;
+              font-weight: bold;
+              margin-bottom: 3mm;
+              text-align: center;
+            }
+            .order-info {
+              font-size: 10pt;
+              margin-bottom: 3mm;
+              text-align: center;
+            }
+            .divider {
+              border-top: 1px dashed #999;
+              margin: 3mm 0;
+            }
+            .item {
+              text-align: left;
+              font-size: 12pt;
+              margin-bottom: 2mm;
+              display: flex;
+              justify-content: space-between;
+            }
+            .footer {
+              font-size: 9pt;
+              margin-top: 4mm;
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="ticket">
+            <div class="header">
+              ${ticketType} TICKET
+            </div>
+            
+            <div class="divider"></div>
+            
+            <div class="order-info">
+              Order #: ${order.id}<br>
+              Table: ${order.table_number || 'N/A'}<br>
+              Waiter: ${order.waiter_name || 'N/A'}<br>
+              Date: ${new Date().toLocaleDateString()}<br>
+              Time: ${new Date().toLocaleTimeString()}
+            </div>
+            
+            <div class="divider"></div>
+            
+            <div style="text-align: left;">
+              <div style="font-weight: bold; margin-bottom: 2mm;">ITEMS:</div>
+              
+              ${items.map(item => `
+                <div class="item">
+                  <div style="font-weight: bold;">${item.quantity}x</div>
+                  <div style="flex-grow: 1; padding-left: 3mm;">${item.name}</div>
+                </div>
+              `).join('')}
+            </div>
+            
+            <div class="divider"></div>
+            
+            <div class="footer">
+              Printed: ${new Date().toLocaleString()}<br>
+              PRIORITY: NORMAL
+            </div>
+          </div>
+          <script>
+            // Print and close window automatically
+            window.onload = function() {
+              window.print();
+              setTimeout(function() {
+                window.close();
+              }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    
+    printWindow.document.close();
+  };
+  
+  // Filter items based on active tab
+  const filteredItems = activeTab === 'all' 
+    ? items 
+    : items.filter(item => item.item_type === activeTab);
   
   return (
     <Box>
@@ -709,27 +652,28 @@ export default function OrderEntry() {
                   </Typography>
                 </Box>
                 
-                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Button
-                    variant="outlined"
-                    color="primary"
-                    size="large"
-                    startIcon={<PrintIcon />}
-                    onClick={handlePrintOrder}
-                    disabled={cart.length === 0}
-                    sx={{ flexGrow: 1, mr: 1 }}
-                  >
-                    Print Order
-                  </Button>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', flexDirection: 'column', gap: 1 }}>
                   <Button
                     variant="contained"
                     color="primary"
                     size="large"
-                    sx={{ flexGrow: 1, ml: 1 }}
+                    fullWidth
                     onClick={handlePlaceOrder}
                     disabled={cart.length === 0}
                   >
                     Place Order
+                  </Button>
+                  
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    size="large"
+                    fullWidth
+                    startIcon={<PrintIcon />}
+                    onClick={handlePrintOrder}
+                    disabled={cart.length === 0}
+                  >
+                    Place & Print For Kitchen/Bar
                   </Button>
                 </Box>
               </>

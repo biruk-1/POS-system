@@ -1,7 +1,10 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { UNSAFE_DataRouterContext, UNSAFE_DataRouterStateContext } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { useSelector } from 'react-redux';
+import { Provider } from 'react-redux';
+import store from './store';
 
 // Auth Pages
 import Login from './pages/Login';
@@ -174,6 +177,13 @@ const theme = createTheme({
   },
 });
 
+const router = {
+  future: {
+    v7_startTransition: true,
+    v7_relativeSplatPath: true
+  }
+};
+
 function App() {
   const { token, user } = useSelector((state) => state.auth);
 
@@ -205,86 +215,88 @@ function App() {
   };
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Router>
-        <Routes>
-          {/* Auth Routes */}
-          <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
-          <Route path="/pin-login" element={!token ? <PinLogin /> : <Navigate to="/" />} />
-          
-          {/* Root Redirect */}
-          <Route path="/" element={<Navigate to={token ? 
-            (user?.role === 'kitchen' ? "/kitchen" : 
-             user?.role === 'bartender' ? "/bartender" : 
-             `/${user?.role}/dashboard`) 
-            : "/login"} />} />
-          
-          {/* Waiter Menu Routes (No Auth Required) */}
-          <Route path="/waiter-menu" element={<WaiterMenu />} />
-          <Route path="/waiter-order-confirmation" element={<WaiterOrderConfirmation />} />
-          
-          {/* Admin Routes */}
-          <Route path="/admin" element={
-            <ProtectedRoute allowedRoles={['admin']}>
-              <AdminLayout />
-            </ProtectedRoute>
-          }>
-            <Route path="dashboard" element={<AdminDashboard />} />
-            <Route path="users" element={<UserManagement />} />
-            <Route path="items" element={<MenuItems />} />
-            <Route path="reports" element={<AdminReports />} />
-            <Route path="settings" element={<AdminSettings />} />
-          </Route>
-          
-          {/* Cashier Routes */}
-          <Route path="/cashier" element={
-            <ProtectedRoute allowedRoles={['cashier']}>
-              <CashierLayout />
-            </ProtectedRoute>
-          }>
-            <Route path="dashboard" element={<CashierDashboard />} />
-            <Route path="order" element={<OrderEntry />} />
-            <Route path="receipt/:orderId" element={<Receipt />} />
-            <Route path="order-ticket" element={<OrderTicket />} />
-            <Route path="sales" element={<CashierSales />} />
-          </Route>
-          
-          {/* Waiter Routes */}
-          <Route path="/waiter" element={
-            <ProtectedRoute allowedRoles={['waiter']}>
-              <WaiterLayout />
-            </ProtectedRoute>
-          }>
-            <Route path="dashboard" element={<WaiterDashboard />} />
-            <Route path="tables" element={<TableManagement />} />
-          </Route>
-          
-          {/* Kitchen Routes */}
-          <Route path="/kitchen" element={
-            <ProtectedRoute allowedRoles={['kitchen']}>
-              <KitchenFullScreenLayout />
-            </ProtectedRoute>
-          }>
-            <Route index element={<KitchenView />} />
-            <Route path="dashboard" element={<KitchenDashboard />} />
-          </Route>
-          
-          {/* Bartender Routes */}
-          <Route path="/bartender" element={
-            <ProtectedRoute allowedRoles={['bartender']}>
-              <BartenderFullScreenLayout />
-            </ProtectedRoute>
-          }>
-            <Route index element={<BartenderView />} />
-            <Route path="dashboard" element={<BartenderDashboard />} />
-          </Route>
-          
-          {/* Catch all - redirects to login */}
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        </Routes>
-      </Router>
-    </ThemeProvider>
+    <Provider store={store}>
+      <ThemeProvider theme={theme}>
+        <BrowserRouter future={router.future}>
+          <CssBaseline />
+          <Routes>
+            {/* Auth Routes */}
+            <Route path="/login" element={!token ? <Login /> : <Navigate to="/" />} />
+            <Route path="/pin-login" element={!token ? <PinLogin /> : <Navigate to="/" />} />
+            
+            {/* Root Redirect */}
+            <Route path="/" element={<Navigate to={token ? 
+              (user?.role === 'kitchen' ? "/kitchen" : 
+               user?.role === 'bartender' ? "/bartender" : 
+               `/${user?.role}/dashboard`) 
+              : "/login"} />} />
+            
+            {/* Waiter Menu Routes (No Auth Required) */}
+            <Route path="/waiter-menu" element={<WaiterMenu />} />
+            <Route path="/waiter-order-confirmation" element={<WaiterOrderConfirmation />} />
+            
+            {/* Admin Routes */}
+            <Route path="/admin" element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout />
+              </ProtectedRoute>
+            }>
+              <Route path="dashboard" element={<AdminDashboard />} />
+              <Route path="users" element={<UserManagement />} />
+              <Route path="items" element={<MenuItems />} />
+              <Route path="reports" element={<AdminReports />} />
+              <Route path="settings" element={<AdminSettings />} />
+            </Route>
+            
+            {/* Cashier Routes */}
+            <Route path="/cashier" element={
+              <ProtectedRoute allowedRoles={['cashier']}>
+                <CashierLayout />
+              </ProtectedRoute>
+            }>
+              <Route path="dashboard" element={<CashierDashboard />} />
+              <Route path="order" element={<OrderEntry />} />
+              <Route path="receipt/:orderId" element={<Receipt />} />
+              <Route path="order-ticket" element={<OrderTicket />} />
+              <Route path="sales" element={<CashierSales />} />
+            </Route>
+            
+            {/* Waiter Routes */}
+            <Route path="/waiter" element={
+              <ProtectedRoute allowedRoles={['waiter']}>
+                <WaiterLayout />
+              </ProtectedRoute>
+            }>
+              <Route path="dashboard" element={<WaiterDashboard />} />
+              <Route path="tables" element={<TableManagement />} />
+            </Route>
+            
+            {/* Kitchen Routes */}
+            <Route path="/kitchen" element={
+              <ProtectedRoute allowedRoles={['kitchen']}>
+                <KitchenFullScreenLayout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<KitchenView />} />
+              <Route path="dashboard" element={<KitchenDashboard />} />
+            </Route>
+            
+            {/* Bartender Routes */}
+            <Route path="/bartender" element={
+              <ProtectedRoute allowedRoles={['bartender']}>
+                <BartenderFullScreenLayout />
+              </ProtectedRoute>
+            }>
+              <Route index element={<BartenderView />} />
+              <Route path="dashboard" element={<BartenderDashboard />} />
+            </Route>
+            
+            {/* Catch all - redirects to login */}
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </ThemeProvider>
+    </Provider>
   );
 }
 

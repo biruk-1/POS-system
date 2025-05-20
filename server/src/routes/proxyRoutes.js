@@ -19,6 +19,23 @@ router.post('/external-api', (req, res) => {
   });
 });
 
+// Mock responses for extensions.aitopia.ai endpoints
+router.all('/ai/prompts', (req, res) => {
+  res.json({ prompts: [] });
+});
+
+router.all('/ai/model_settings', (req, res) => {
+  res.json({ settings: {} });
+});
+
+router.all('/languages/lang/get/lang/:lang', (req, res) => {
+  res.json({ lang: req.params.lang, messages: {} });
+});
+
+router.all('/extensions/app/get_key', (req, res) => {
+  res.json({ success: true });
+});
+
 // Add more proxy routes as needed
 
 module.exports = router;

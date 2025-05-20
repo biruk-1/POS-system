@@ -18,26 +18,53 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+
+// Updated CORS configuration
+const corsOptions = {
+  origin: ['http://localhost:5173', 'https://extensions.aitopia.ai'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Updated Socket.IO configuration
 const io = socketIO(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    origin: 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
-  }
+  },
+  transports: ['websocket', 'polling']
 });
 
 const PORT = process.env.PORT || 5001;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_only_for_development';
 
 // Middleware
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
 app.use(express.json());
+
+// Add CORS preflight handler
+app.options('*', cors(corsOptions));
+
+// Add Socket.IO authentication middleware
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) {
+    return next(new Error('Authentication error: Token not provided'));
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return next(new Error('Authentication error: Invalid token'));
+    }
+    socket.user = decoded;
+    next();
+  });
+});
 
 // Configure multer for file uploads
 const uploadDir = path.join(__dirname, 'uploads');
@@ -1483,148 +1510,117 @@ app.post('/api/users', authenticateToken, checkRole(['admin']), (req, res) => {
 
 // Update order status (for cashier)
 app.put('/api/orders/:id/status', authenticateToken, checkRole(['cashier', 'admin']), (req, res) => {
-  const { status, payment_amount } = req.body;
   const orderId = req.params.id;
+  const { status, payment_amount } = req.body;
   
-  if (!['pending', 'in-progress', 'ready', 'completed', 'paid', 'cancelled'].includes(status)) {
-    return res.status(400).json({ error: 'Invalid status' });
+  if (!status) {
+    return res.status(400).json({ error: 'Status is required' });
   }
   
-  // Begin transaction
-  db.run('BEGIN TRANSACTION');
-  
-  // Update order status
-  db.run(
-    'UPDATE orders SET status = ? WHERE id = ?',
-    [status, orderId],
-    function(err) {
+  // Start a transaction
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+    
+    // Update order status
+    db.run('UPDATE orders SET status = ? WHERE id = ?', [status, orderId], function(err) {
       if (err) {
-        db.run('ROLLBACK');
         console.error('Error updating order status:', err);
+        db.run('ROLLBACK');
         return res.status(500).json({ error: 'Database error' });
       }
       
-      // If no order was found or updated
-      if (this.changes === 0) {
-        db.run('ROLLBACK');
-        return res.status(404).json({ error: 'Order not found' });
-      }
-      
-      // If payment is being processed, record it
-      if ((status === 'paid' || status === 'completed') && payment_amount) {
-        db.run(
-          'INSERT INTO payments (order_id, amount, cashier_id, payment_date) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-          [orderId, payment_amount, req.user.id],
-          function(err) {
-            if (err) {
-              db.run('ROLLBACK');
-              console.error('Error recording payment:', err);
-              return res.status(500).json({ error: 'Database error while recording payment' });
-            }
-            
-            // Commit transaction and send response
-            db.run('COMMIT');
-            
-                    // Emit socket event for real-time updates
-        io.emit('order_status_updated', { id: parseInt(orderId), status, payment_amount });
-        
-        // Also emit a general sales_data_updated event for dashboards
-        if (status === 'completed' || status === 'paid') {
-          // Update sales_reports table for today to keep it in sync with orders
-          const today = new Date().toISOString().split('T')[0];
-          
-          // Insert or update the sales report for today
-          db.run(`
-            INSERT INTO sales_reports (date, total_sales, food_items_count, drink_items_count, created_by)
-            VALUES (?, ?, 0, 0, ?)
-            ON CONFLICT(date) DO UPDATE SET
-              total_sales = total_sales + ?
-          `, [today, payment_amount, req.user.id, payment_amount], function(err) {
-            if (err) {
-              console.error('Error updating sales_reports table:', err);
-            } else {
-              console.log(`Updated sales_reports for ${today}, added ${payment_amount} to total`);
-            }
-            
-            // Emit both regular and admin-specific events
-            io.emit('sales_data_updated', { 
-              message: 'Sales data updated due to order status change',
-              order_id: parseInt(orderId),
-              order_total: payment_amount,
-              timestamp: new Date().toISOString()
-            });
-            
-            // Emit a specific event for admin dashboard
-            io.emit('admin_sales_updated', {
-              timeRanges: ['daily', 'weekly', 'monthly', 'yearly'],
-              order_id: parseInt(orderId),
-              timestamp: new Date().toISOString()
-            });
-          });
-        }
-        
-        res.json({ id: orderId, status, message: 'Order status and payment updated successfully' });
+      // If order is completed or paid, update sales reports
+      if (status === 'completed' || status === 'paid') {
+        // Get order details
+        db.get('SELECT * FROM orders WHERE id = ?', [orderId], (err, order) => {
+          if (err || !order) {
+            console.error('Error fetching order:', err);
+            db.run('ROLLBACK');
+            return res.status(500).json({ error: 'Database error' });
           }
-        );
-      } else {
-        // Just commit the status update
-        db.run('COMMIT');
-        
-        // Emit socket event for real-time updates
-        io.emit('order_status_updated', { id: parseInt(orderId), status });
-        
-        // Also emit a general sales_data_updated event for dashboards
-        if (status === 'completed' || status === 'paid') {
-          // Get the order to update sales_reports
-          db.get('SELECT * FROM orders WHERE id = ?', [orderId], (err, order) => {
-            if (!err && order) {
-              // Update sales_reports table for today
-              const today = new Date().toISOString().split('T')[0];
-              const total_amount = order.total_amount || 0;
+          
+          // Count food and drink items
+          db.all(`
+            SELECT item_type, SUM(quantity) as count
+            FROM order_items
+            WHERE order_id = ?
+            GROUP BY item_type
+          `, [orderId], (err, itemCounts) => {
+            if (err) {
+              console.error('Error counting items:', err);
+              db.run('ROLLBACK');
+              return res.status(500).json({ error: 'Database error' });
+            }
+            
+            const foodCount = itemCounts.find(i => i.item_type === 'food')?.count || 0;
+            const drinkCount = itemCounts.find(i => i.item_type === 'drink')?.count || 0;
+            
+            // Insert into sales_reports
+            db.run(`
+              INSERT INTO sales_reports (
+                date,
+                order_id,
+                total_amount,
+                food_items_count,
+                drink_items_count
+              ) VALUES (?, ?, ?, ?, ?)
+            `, [
+              new Date().toISOString().split('T')[0],
+              orderId,
+              order.total_amount,
+              foodCount,
+              drinkCount
+            ], function(err) {
+              if (err) {
+                console.error('Error inserting sales report:', err);
+                // Don't roll back, just continue with the order status update
+                console.log('Continuing with order status update despite sales report error');
+              } else {
+                console.log(`Sales report created for order ${orderId}`);
+              }
               
-              // Insert or update the sales report for today
-              db.run(`
-                INSERT INTO sales_reports (date, total_sales, food_items_count, drink_items_count, created_by)
-                VALUES (?, ?, 0, 0, ?)
-                ON CONFLICT(date) DO UPDATE SET
-                  total_sales = total_sales + ?
-              `, [today, total_amount, req.user.id, total_amount], function(err) {
-                if (err) {
-                  console.error('Error updating sales_reports table:', err);
-                } else {
-                  console.log(`Updated sales_reports for ${today}, added ${total_amount} to total`);
-                }
-                
-                // Emit both events
-                io.emit('sales_data_updated', { 
-                  message: 'Sales data updated due to order status change',
-                  order_id: parseInt(orderId),
-                  order_total: total_amount,
-                  timestamp: new Date().toISOString()
-                });
-                
-                // Emit a specific event for admin dashboard
-                io.emit('admin_sales_updated', {
-                  timeRanges: ['daily', 'weekly', 'monthly', 'yearly'],
-                  order_id: parseInt(orderId),
-                  timestamp: new Date().toISOString()
-                });
+              // Commit the transaction
+              db.run('COMMIT');
+              
+              // Emit socket events
+              io.emit('order_status_updated', { 
+                id: parseInt(orderId), 
+                status,
+                total_amount: order.total_amount
               });
-            } else {
-              // If order not found, still emit basic event
-              io.emit('sales_data_updated', { 
-                message: 'Sales data updated due to order status change',
+              
+              io.emit('sales_data_updated', {
+                order_id: parseInt(orderId),
+                total_amount: order.total_amount,
+                timestamp: new Date().toISOString()
+              });
+              
+              io.emit('admin_sales_updated', {
+                timeRanges: ['daily', 'weekly', 'monthly', 'yearly'],
                 order_id: parseInt(orderId),
                 timestamp: new Date().toISOString()
               });
-            }
+              
+              res.json({ 
+                id: orderId, 
+                status, 
+                message: 'Order status and sales data updated successfully' 
+              });
+            });
           });
-        }
-        
-        res.json({ id: orderId, status, message: 'Order status updated successfully' });
+        });
+      } else {
+        // If not completed/paid, just commit and return
+        db.run('COMMIT');
+        io.emit('order_status_updated', { id: parseInt(orderId), status });
+        res.json({ 
+          id: orderId, 
+          status, 
+          message: 'Order status updated successfully' 
+        });
       }
-    }
-  );
+    });
+  });
 });
 
 // Tables Management API
@@ -2092,6 +2088,110 @@ app.get('/api/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, 
     console.error('Unexpected error in admin sales endpoint:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Admin-specific sales endpoint
+app.get('/api/admin/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, res) => {
+  const { timeRange } = req.params;
+  const { waiter_id } = req.query;
+  
+  // Validate time range
+  const validTimeRanges = ['daily', 'weekly', 'monthly', 'yearly'];
+  if (!validTimeRanges.includes(timeRange)) {
+    return res.status(400).json({ error: 'Invalid time range' });
+  }
+  
+  // Calculate date range
+  const now = new Date();
+  let startDate = new Date(now);
+  
+  switch(timeRange) {
+    case 'weekly':
+      startDate.setDate(startDate.getDate() - 7);
+      break;
+    case 'monthly':
+      startDate.setDate(startDate.getDate() - 30);
+      break;
+    case 'yearly':
+      startDate.setDate(startDate.getDate() - 365);
+      break;
+    default: // daily
+      startDate.setHours(0, 0, 0, 0);
+      now.setHours(23, 59, 59, 999);
+  }
+  
+  // Build the base query
+  let query = `
+    SELECT 
+      DATE(o.created_at) as date,
+      COUNT(DISTINCT o.id) as completedOrders,
+      SUM(o.total_amount) as totalSales,
+      u.id as waiter_id,
+      u.username as waiter_name,
+      COUNT(DISTINCT o.id) as order_count,
+      SUM(o.total_amount) as total_sales
+    FROM orders o
+    JOIN users u ON o.waiter_id = u.id
+    WHERE o.created_at BETWEEN datetime(?) AND datetime(?)
+    AND (o.status = 'completed' OR o.status = 'paid')
+  `;
+  
+  // Add waiter filter if specified
+  const params = [startDate.toISOString(), now.toISOString()];
+  if (waiter_id && waiter_id !== 'all') {
+    query += ' AND o.waiter_id = ?';
+    params.push(waiter_id);
+  }
+  
+  // Group by date and waiter
+  query += ' GROUP BY DATE(o.created_at), u.id, u.username ORDER BY o.created_at DESC';
+  
+  console.log('Executing admin sales query:', {
+    timeRange,
+    startDate: startDate.toISOString(),
+    endDate: now.toISOString(),
+    waiter_id,
+    query
+  });
+  
+  // Execute the query
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error('Error fetching admin sales:', err);
+      return res.status(500).json({ error: 'Database error' });
+    }
+    
+    // Process the results
+    const salesByDate = {};
+    rows.forEach(row => {
+      if (!salesByDate[row.date]) {
+        salesByDate[row.date] = {
+          date: row.date,
+          totalSales: 0,
+          completedOrders: 0,
+          waiters: []
+        };
+      }
+      
+      salesByDate[row.date].totalSales += row.total_sales;
+      salesByDate[row.date].completedOrders += row.order_count;
+      salesByDate[row.date].waiters.push({
+        waiter_id: row.waiter_id,
+        waiter_name: row.waiter_name,
+        order_count: row.order_count,
+        total_sales: row.total_sales
+      });
+    });
+    
+    // Convert to array and sort by date
+    const result = Object.values(salesByDate).sort((a, b) => 
+      new Date(b.date) - new Date(a.date)
+    );
+    
+    res.json({
+      [timeRange]: result
+    });
+  });
 });
 
 // Use proxy routes
