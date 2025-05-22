@@ -109,6 +109,18 @@ export default function CashierDashboard() {
   const [filteredOrders, setFilteredOrders] = useState([]);
   const [customDate, setCustomDate] = useState('');
 
+  // Add updatingOrderId state
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
+
+  // Add this helper function at the top level of the component
+  const isSameDay = (date1, date2) => {
+    const d1 = new Date(date1);
+    const d2 = new Date(date2);
+    return d1.getFullYear() === d2.getFullYear() &&
+           d1.getMonth() === d2.getMonth() &&
+           d1.getDate() === d2.getDate();
+  };
+
   // Function to extract available dates from orders
   const getAvailableDates = (ordersData) => {
     const dates = {};
@@ -119,13 +131,18 @@ export default function CashierDashboard() {
       if (order.created_at) {
         try {
           const date = new Date(order.created_at);
-          const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+          const dateString = date.toISOString().split('T')[0];
+          const displayDate = date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          });
           
           if (!dates[dateString]) {
             dates[dateString] = {
               date: dateString,
               count: 0,
-              display: date.toLocaleDateString()
+              display: displayDate
             };
           }
           
@@ -362,7 +379,36 @@ export default function CashierDashboard() {
     };
   }, [dateFilter]);
 
-  // Simplify the date filtering logic to a single implementation
+  // Update the handleDateFilterChange function
+  const handleDateFilterChange = (event) => {
+    const newDateFilter = event.target.value;
+    console.log('Date filter changed to:', newDateFilter);
+    
+    if (newDateFilter === 'today') {
+      const today = new Date().toISOString().split('T')[0];
+      console.log('Setting filter to today:', today);
+      setDateFilter(today);
+    } else if (newDateFilter === 'custom') {
+      // Don't change the filter yet, wait for custom date input
+      setDateFilter('custom');
+    } else {
+      setDateFilter(newDateFilter);
+    }
+    
+    // Refresh orders when date filter changes
+    fetchOrders();
+  };
+
+  // Add custom date change handler
+  const handleCustomDateChange = (event) => {
+    const selectedDate = event.target.value;
+    console.log('Custom date selected:', selectedDate);
+    setCustomDate(selectedDate);
+    setDateFilter(selectedDate);
+    fetchOrders();
+  };
+
+  // Update the date filtering logic
   useEffect(() => {
     if (orders.length > 0) {
       console.log(`Applying date filter: ${dateFilter} to ${orders.length} orders`);
@@ -372,43 +418,50 @@ export default function CashierDashboard() {
         setFilteredOrders(orders);
         console.log(`Showing all ${orders.length} orders`);
       } else {
-        // Create a date object from the filter string for comparison
-        const filterDate = new Date(dateFilter);
-        // Normalize to start of day in local timezone
-        filterDate.setHours(0, 0, 0, 0);
+        // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split('T')[0];
+        
+        // If filtering for today, use today's date
+        const filterDate = dateFilter === 'today' ? today : dateFilter;
+        console.log('Filter date:', filterDate);
         
         const filtered = orders.filter(order => {
-          if (!order.created_at) return false;
+          if (!order.created_at) {
+            console.log(`Order ${order.id} missing created_at field`);
+            return false;
+          }
           
           try {
-            // Create date object from order created_at
-            const orderDate = new Date(order.created_at);
-            // Normalize to start of day in local timezone
-            orderDate.setHours(0, 0, 0, 0);
+            // Convert order date to YYYY-MM-DD format for comparison
+            const orderDate = new Date(order.created_at).toISOString().split('T')[0];
+            console.log(`Comparing order ${order.id} date: ${orderDate} with filter: ${filterDate}`);
             
-            // Compare the date objects directly using getTime()
-            return orderDate.getTime() === filterDate.getTime();
+            // Compare the dates
+            const matches = orderDate === filterDate;
+            if (matches) {
+              console.log(`Order ${order.id} matches filter date`);
+            }
+            return matches;
           } catch (e) {
             console.error(`Error comparing dates for order ${order.id}:`, e);
             return false;
           }
         });
         
+        console.log(`Filtered to ${filtered.length} orders for date ${filterDate}`);
+        if (filtered.length > 0) {
+          console.log('Sample filtered orders:', filtered.slice(0, 3).map(o => ({
+            id: o.id,
+            date: new Date(o.created_at).toISOString().split('T')[0]
+          })));
+        }
+        
         setFilteredOrders(filtered);
-        console.log(`Filtered to ${filtered.length} orders for date ${dateFilter}`);
       }
     } else {
       setFilteredOrders([]);
     }
   }, [orders, dateFilter]);
-
-  const handleDateFilterChange = (event) => {
-    setDateFilter(event.target.value);
-    
-    // Refresh orders when date filter changes
-    console.log(`Date filter changed to: ${event.target.value}`);
-    fetchOrders();
-  };
 
   // Debugging function to analyze order dates
   const analyzeOrderDates = (orders) => {
@@ -550,24 +603,41 @@ export default function CashierDashboard() {
     }
   };
 
-  const handleUpdateOrderStatus = (order) => {
-    // Prevent duplicate dialog openings by checking if already open
-    if (orderStatusDialog) {
-      return;
+  const handleUpdateOrderStatus = async (order) => {
+    try {
+      // Fetch detailed order data
+      const response = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      
+      const detailedOrder = response.data;
+      console.log('Fetched detailed order data for status update:', detailedOrder);
+      
+      setSelectedOrder(detailedOrder);
+      setNewStatus(detailedOrder.status || 'pending');
+      
+      // Set initial payment amount if status is paid or completed
+      if (detailedOrder.status === 'paid' || detailedOrder.status === 'completed') {
+        const totalAmount = detailedOrder.total_amount || 
+          (detailedOrder.items && detailedOrder.items.length > 0 
+            ? detailedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+            : 0);
+        setPaymentAmount(totalAmount.toString());
+      } else {
+        setPaymentAmount('');
+      }
+      
+      setOrderStatusDialog(true);
+    } catch (error) {
+      console.error('Error fetching order details:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to load order details: ' + (error.response?.data?.message || error.message),
+        severity: 'error'
+      });
     }
-    
-    setSelectedOrder(order);
-    const initialStatus = order.status || 'pending';
-    setNewStatus(initialStatus);
-    
-    // Set initial payment amount if status is paid or completed
-    if (initialStatus === 'paid' || initialStatus === 'completed') {
-      setPaymentAmount(order.total_amount?.toString() || '0');
-    } else {
-      setPaymentAmount('');
-    }
-    
-    setOrderStatusDialog(true);
   };
 
   const handleStatusChange = (event) => {
@@ -744,70 +814,12 @@ export default function CashierDashboard() {
     return `${diffHours} hours ago`;
   };
 
-  // Add the date filter UI component where the orders table is rendered
+  // Update the renderOrdersTable function to use the new date filter
   const renderOrdersTable = () => (
     <Box>
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Typography variant="h6">Recent Orders</Typography>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          <FormControl sx={{ width: 220 }}>
-            <InputLabel>Filter by Date</InputLabel>
-            <Select
-              value={dateFilter}
-              onChange={handleDateFilterChange}
-              label="Filter by Date"
-            >
-              <MenuItem value="all">All Orders</MenuItem>
-              <MenuItem value={new Date().toISOString().split('T')[0]}>
-                Today ({new Date().toLocaleDateString()})
-              </MenuItem>
-              <MenuItem value={new Date(Date.now() - 86400000).toISOString().split('T')[0]}>
-                Yesterday ({new Date(Date.now() - 86400000).toLocaleDateString()})
-              </MenuItem>
-              
-              {availableDates.length > 0 && (
-                <>
-                  <Divider />
-                  <ListSubheader>Available Dates ({availableDates.length})</ListSubheader>
-                  {availableDates.map(dateItem => (
-                    <MenuItem key={dateItem.date} value={dateItem.date}>
-                      {dateItem.display} ({dateItem.count} orders)
-                    </MenuItem>
-                  ))}
-                </>
-              )}
-              
-              <Divider />
-              <MenuItem value="custom">Custom Date...</MenuItem>
-            </Select>
-          </FormControl>
-          
-          {dateFilter === 'custom' && (
-            <TextField
-              label="Select Date"
-              type="date"
-              value={customDate || new Date().toISOString().split('T')[0]}
-              onChange={(e) => {
-                const selectedDate = e.target.value;
-                setCustomDate(selectedDate);
-                setDateFilter(selectedDate);
-                console.log(`Custom date selected: ${selectedDate}`);
-              }}
-              sx={{ width: 220 }}
-              InputLabelProps={{
-                shrink: true,
-              }}
-            />
-          )}
-          
-          <IconButton
-            color="primary"
-            onClick={handleRefresh}
-            disabled={loading}
-          >
-            <RefreshIcon />
-          </IconButton>
-        </Box>
+        {renderDateFilter()}
       </Box>
       <TableContainer component={Paper}>
         <Table>
@@ -822,37 +834,129 @@ export default function CashierDashboard() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredOrders.map((order) => (
-              <TableRow key={order.id}>
-                <TableCell>{order.id}</TableCell>
-                <TableCell>{new Date(order.created_at).toLocaleTimeString()}</TableCell>
-                <TableCell>{order.items?.length || 0} items</TableCell>
-                <TableCell>{formatCurrency(order.total_amount)}</TableCell>
-                <TableCell>
-                  <Chip
-                    label={order.status}
-                    color={getStatusColor(order.status)}
-                    size="small"
-                  />
-                </TableCell>
-                <TableCell>
-                  <IconButton
-                    onClick={() => handleUpdateOrderStatus(order)}
-                    color="primary"
-                    size="small"
-                  >
-                    <EditIcon />
-                  </IconButton>
-                  <IconButton
-                    onClick={() => handleGenerateReceipt(order)}
-                    color="secondary"
-                    size="small"
-                  >
-                    <PrintIcon />
-                  </IconButton>
+            {filteredOrders.length > 0 ? (
+              filteredOrders.map((order) => (
+                <TableRow key={order.id}>
+                  <TableCell>{order.id}</TableCell>
+                  <TableCell>{new Date(order.created_at).toLocaleTimeString()}</TableCell>
+                  <TableCell>{order.items?.length || 0} items</TableCell>
+                  <TableCell>{formatCurrency(order.total_amount)}</TableCell>
+                  <TableCell>
+                    <Chip
+                      label={order.status}
+                      color={getStatusColor(order.status)}
+                      size="small"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <IconButton
+                      onClick={() => handleUpdateOrderStatus(order)}
+                      color="primary"
+                      size="small"
+                      title="Edit Order"
+                    >
+                      <EditIcon />
+                    </IconButton>
+                    <IconButton
+                      onClick={async () => {
+                        try {
+                          setUpdatingOrderId(order.id);
+                          const newStatus = 
+                            order.status === 'pending' ? 'in-progress' :
+                            order.status === 'in-progress' ? 'completed' :
+                            order.status === 'completed' ? 'paid' : 'pending';
+                          
+                          // Fetch detailed order data first
+                          const detailResponse = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
+                            headers: {
+                              Authorization: `Bearer ${token}`
+                            }
+                          });
+                          
+                          const detailedOrder = detailResponse.data;
+                          console.log('Fetched detailed order data for quick update:', detailedOrder);
+                          
+                          // Ensure we have the correct total amount
+                          const totalAmount = detailedOrder.total_amount || 
+                            (detailedOrder.items && detailedOrder.items.length > 0 
+                              ? detailedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+                              : 0);
+                          
+                          const response = await axios.put(
+                            `http://localhost:5001/api/orders/${order.id}/status`, 
+                            {
+                              status: newStatus,
+                              payment_amount: newStatus === 'paid' ? totalAmount : 0
+                            }, 
+                            {
+                              headers: {
+                                Authorization: `Bearer ${token}`
+                              }
+                            }
+                          );
+                          
+                          // Update order in local state with detailed data
+                          setOrders(prevOrders => 
+                            prevOrders.map(o => 
+                              o.id === order.id ? { ...detailedOrder, status: newStatus } : o
+                            )
+                          );
+                          
+                          // Also update in filtered orders
+                          setFilteredOrders(prevOrders => 
+                            prevOrders.map(o => 
+                              o.id === order.id ? { ...detailedOrder, status: newStatus } : o
+                            )
+                          );
+                          
+                          setSnackbar({
+                            open: true,
+                            message: `Order ${order.id} status updated to ${newStatus}`,
+                            severity: 'success'
+                          });
+                          
+                          // Refresh dashboard data if needed
+                          if (newStatus === 'completed' || newStatus === 'paid') {
+                            fetchDashboardData();
+                          }
+                        } catch (error) {
+                          console.error('Error updating order status:', error);
+                          setSnackbar({
+                            open: true,
+                            message: 'Failed to update order status: ' + (error.response?.data?.message || error.message),
+                            severity: 'error'
+                          });
+                        } finally {
+                          setUpdatingOrderId(null);
+                        }
+                      }}
+                      color="success"
+                      size="small"
+                      title="Update Status"
+                      disabled={updatingOrderId === order.id}
+                    >
+                      <CheckCircleIcon />
+                    </IconButton>
+                    <IconButton
+                      onClick={() => handleGenerateReceipt(order)}
+                      color="secondary"
+                      size="small"
+                      title="Print Receipt"
+                    >
+                      <PrintIcon />
+                    </IconButton>
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={6} align="center">
+                  <Typography variant="body1" color="text.secondary">
+                    No orders found for the selected date
+                  </Typography>
                 </TableCell>
               </TableRow>
-            ))}
+            )}
           </TableBody>
         </Table>
       </TableContainer>
@@ -864,6 +968,113 @@ export default function CashierDashboard() {
     console.log(`Fetching orders with filter: ${dateFilter}`);
     fetchOrders();
   }, [dateFilter, token]);
+
+  // Add the status update dialog component
+  const renderStatusUpdateDialog = () => (
+    <Dialog 
+      open={orderStatusDialog} 
+      onClose={() => setOrderStatusDialog(false)}
+      maxWidth="sm"
+      fullWidth
+    >
+      <DialogTitle>
+        Update Order #{selectedOrder?.id} Status
+      </DialogTitle>
+      <DialogContent>
+        <Box sx={{ mt: 2 }}>
+          <FormControl fullWidth sx={{ mb: 2 }}>
+            <InputLabel>New Status</InputLabel>
+            <Select
+              value={newStatus}
+              onChange={handleStatusChange}
+              label="New Status"
+            >
+              <MenuItem value="pending">Pending</MenuItem>
+              <MenuItem value="in-progress">In Progress</MenuItem>
+              <MenuItem value="completed">Completed</MenuItem>
+              <MenuItem value="paid">Paid</MenuItem>
+              <MenuItem value="cancelled">Cancelled</MenuItem>
+            </Select>
+          </FormControl>
+          
+          {(newStatus === 'paid' || newStatus === 'completed') && (
+            <TextField
+              fullWidth
+              label="Payment Amount"
+              type="number"
+              value={paymentAmount}
+              onChange={handlePaymentAmountChange}
+              InputProps={{
+                startAdornment: <InputAdornment position="start">$</InputAdornment>,
+              }}
+              sx={{ mb: 2 }}
+            />
+          )}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setOrderStatusDialog(false)}>Cancel</Button>
+        <Button 
+          onClick={handleSubmitStatusUpdate}
+          variant="contained" 
+          color="primary"
+          disabled={loading}
+        >
+          Update Status
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+
+  // Update the renderDateFilter function
+  const renderDateFilter = () => (
+    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      <FormControl sx={{ width: 220 }}>
+        <InputLabel>Filter by Date</InputLabel>
+        <Select
+          value={dateFilter === new Date().toISOString().split('T')[0] ? 'today' : dateFilter}
+          onChange={handleDateFilterChange}
+          label="Filter by Date"
+        >
+          <MenuItem value="all">All Orders</MenuItem>
+          <MenuItem value="today">
+            Today ({new Date().toLocaleDateString()})
+          </MenuItem>
+          <MenuItem value={new Date(Date.now() - 86400000).toISOString().split('T')[0]}>
+            Yesterday ({new Date(Date.now() - 86400000).toLocaleDateString()})
+          </MenuItem>
+          
+          {availableDates.length > 0 && (
+            <>
+              <Divider />
+              <ListSubheader>Available Dates ({availableDates.length})</ListSubheader>
+              {availableDates.map(dateItem => (
+                <MenuItem key={dateItem.date} value={dateItem.date}>
+                  {dateItem.display} ({dateItem.count} orders)
+                </MenuItem>
+              ))}
+            </>
+          )}
+          
+          <Divider />
+          <MenuItem value="custom">Custom Date...</MenuItem>
+        </Select>
+      </FormControl>
+      
+      {dateFilter === 'custom' && (
+        <TextField
+          label="Select Date"
+          type="date"
+          value={customDate || new Date().toISOString().split('T')[0]}
+          onChange={handleCustomDateChange}
+          sx={{ width: 220 }}
+          InputLabelProps={{
+            shrink: true,
+          }}
+        />
+      )}
+    </Box>
+  );
 
   if (loading) {
     return (
@@ -1163,6 +1374,22 @@ export default function CashierDashboard() {
       </Grid>
 
       {renderOrdersTable()}
+      {renderStatusUpdateDialog()}
+      
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity} 
+          variant="filled"
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

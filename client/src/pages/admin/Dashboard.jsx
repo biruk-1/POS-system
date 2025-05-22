@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
 import io from 'socket.io-client';
@@ -44,9 +44,17 @@ import {
   Save as SaveIcon,
   Cancel as CancelIcon,
   GetApp as DownloadIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  CheckCircle as CheckCircleIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { useNavigate } from 'react-router-dom';
+
+// Add API URL constant
+const API_URL = 'http://localhost:5001/api';
 
 // Add fetchOrdersData helper function
 const fetchOrdersData = async (token) => {
@@ -117,6 +125,9 @@ export default function AdminDashboard() {
     message: '',
     severity: 'success'
   });
+
+  const [customDate, setCustomDate] = useState(null);
+  const [showCustomDatePicker, setShowCustomDatePicker] = useState(false);
 
   // Add fetchOrders function
   const fetchOrders = async () => {
@@ -232,76 +243,53 @@ export default function AdminDashboard() {
   }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
 
   // Completely rewritten fetch sales function for admin
-  const fetchAdminSales = async () => {
+  const fetchAdminSales = async (timeRangeParam, waiterId = 'all') => {
     try {
-      console.log('Fetching admin sales data');
-      setLoading(true);
-      
-      // Build query parameters
-      const params = {
-        waiter_id: selectedWaiter !== 'all' ? selectedWaiter : undefined,
-        _t: new Date().getTime() // Cache buster
-      };
-      
-      console.log('Fetching sales with params:', params);
-      
-      // Make API request to the admin-specific endpoint
-      const response = await axios.get(`http://localhost:5001/api/admin/sales/${timeRange}`, {
-        params,
+      console.log('Fetching admin sales data for:', {
+        timeRange: timeRangeParam,
+        waiterId,
+        customDate: customDate ? customDate.toISOString().split('T')[0] : null
+      });
+
+      let url = `http://localhost:5001/api/admin/sales/${timeRangeParam}`;
+      const params = new URLSearchParams();
+
+      if (waiterId !== 'all') {
+        params.append('waiter_id', waiterId);
+      }
+
+      // Handle custom date
+      if (timeRangeParam === 'custom' && customDate) {
+        const formattedDate = customDate.toISOString().split('T')[0];
+        params.append('date', formattedDate);
+      }
+
+      // Add cache buster
+      params.append('_t', Date.now());
+
+      const response = await fetch(`${url}?${params.toString()}`, {
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
       });
-      
-      console.log('Sales response:', response.data);
-      
-      // Process the response data
-      const salesData = response.data[timeRange] || [];
-      
-      // Get the most recent data point (first in the array)
-      const latestData = salesData[0] || {
-        totalSales: 0,
-        completedOrders: 0,
-        waiters: []
-      };
-      
-      // Update state with new data
-      setSales({
-        totalSales: latestData.totalSales || 0,
-        completedOrders: latestData.completedOrders || 0,
-        waiterStats: (latestData.waiters || []).map(waiter => ({
-          waiter_id: waiter.waiter_id,
-          waiter_name: waiter.waiter_name || 'Unknown',
-          order_count: waiter.order_count || 0,
-          total_sales: waiter.total_sales || 0,
-          avgOrder: waiter.order_count > 0 ? waiter.total_sales / waiter.order_count : 0
-        }))
-      });
-      
-      setLoading(false);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Sales data received:', data);
+
+      if (data[timeRangeParam]) {
+        setSales(data[timeRangeParam]);
+      }
     } catch (error) {
       console.error('Error fetching admin sales:', error);
       console.error('Error details:', {
         message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
+        response: error.response,
+        status: error.status
       });
-      
-      // Set empty state on error
-      setSales({
-        totalSales: 0,
-        completedOrders: 0,
-        waiterStats: []
-      });
-      
-      setSnackbar({
-        open: true,
-        message: `Failed to load sales data: ${error.message || 'Unknown error'}`,
-        severity: 'error'
-      });
-      
-      setLoading(false);
     }
   };
 
@@ -377,7 +365,17 @@ export default function AdminDashboard() {
   };
 
   const handleTimeRangeChange = (event) => {
-    setTimeRange(event.target.value);
+    const newTimeRange = event.target.value;
+    setTimeRange(newTimeRange);
+    
+    if (newTimeRange === 'custom') {
+      setShowCustomDatePicker(true);
+      // Don't fetch data yet - wait for date selection
+    } else {
+      setShowCustomDatePicker(false);
+      setCustomDate(null);
+      fetchAdminSales(newTimeRange, selectedWaiter);
+    }
   };
 
   const handleSearchChange = (event) => {
@@ -477,15 +475,33 @@ export default function AdminDashboard() {
   };
 
   // Order editing functions
-  const handleEditOrder = (orderId) => {
+  const handleEditOrder = async (orderId) => {
     console.log('Editing order:', orderId);
-    // Find the order to edit
-    const orderToEdit = orders.find(order => order.id === orderId);
+    
+    try {
+      setLoading(true);
+      
+      // Fetch detailed order data including items
+      const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const orderToEdit = response.data;
     
     if (orderToEdit) {
-      // Set the current order and make a copy for editing
-      setCurrentOrder(orderToEdit);
-      setEditedOrder({...orderToEdit});
+        console.log('Fetched detailed order data:', orderToEdit);
+        
+        // Ensure items is always an array
+        const orderWithItems = {
+          ...orderToEdit,
+          items: Array.isArray(orderToEdit.items) ? orderToEdit.items : []
+        };
+        
+        setCurrentOrder(orderWithItems);
+        setEditedOrder({...orderWithItems});
       setEditDialogOpen(true);
     } else {
       setSnackbar({
@@ -493,6 +509,16 @@ export default function AdminDashboard() {
         message: `Order #${orderId} not found`,
         severity: 'error'
       });
+      }
+    } catch (error) {
+      console.error('Error fetching order details:', error);
+      setSnackbar({
+        open: true,
+        message: `Failed to load order details: ${error.message || 'Unknown error'}`,
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -523,15 +549,15 @@ export default function AdminDashboard() {
   };
 
   const handleSaveOrder = async () => {
-    if (!editedOrder) return;
+    if (!editedOrder) return Promise.resolve(); // Return resolved promise if no order
     
     try {
       setLoading(true);
       
       // Calculate the new total amount
-      const totalAmount = editedOrder.items.reduce(
-        (sum, item) => sum + (item.price * item.quantity), 0
-      );
+      const totalAmount = editedOrder.items && editedOrder.items.length > 0
+        ? editedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+        : 0;
       
       // Prepare the update payload
       const updateData = {
@@ -552,8 +578,10 @@ export default function AdminDashboard() {
       );
       
       if (response.data) {
-        // Close the dialog
+        // Close the dialog if it's open
+        if (editDialogOpen) {
         setEditDialogOpen(false);
+        }
         
         // Refresh the orders list
         fetchOrders();
@@ -565,6 +593,8 @@ export default function AdminDashboard() {
           severity: 'success'
         });
       }
+      
+      return response; // Return the response for chaining
     } catch (error) {
       console.error('Error updating order:', error);
       
@@ -573,6 +603,8 @@ export default function AdminDashboard() {
         message: `Failed to update order: ${error.message || 'Unknown error'}`,
         severity: 'error'
       });
+      
+      throw error; // Re-throw to allow catch in calling code
     } finally {
       setLoading(false);
     }
@@ -614,6 +646,62 @@ export default function AdminDashboard() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Add handleCustomDateChange
+  const handleCustomDateChange = async (date) => {
+    if (!date) {
+      // If date is cleared, reset to daily view
+      setTimeRange('daily');
+      setShowCustomDatePicker(false);
+      setCustomDate(null);
+      await fetchAdminSales('daily', selectedWaiter);
+      return;
+    }
+
+    // Ensure date is a Date object
+    const dateObj = date instanceof Date ? date : new Date(date);
+    if (isNaN(dateObj.getTime())) {
+      console.error('Invalid date provided:', date);
+      return;
+    }
+
+    // Format the date for the API request
+    const formattedDate = dateObj.toISOString().split('T')[0];
+    console.log('Selected date:', formattedDate);
+
+    // Update state
+    setCustomDate(dateObj);
+    setTimeRange('custom');
+    setShowCustomDatePicker(true);
+    
+    // Fetch data with the new date
+    try {
+      const url = `http://localhost:5001/api/admin/sales/custom?date=${formattedDate}&_t=${Date.now()}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('Sales data received for date:', formattedDate, data);
+
+      if (data.custom) {
+        setSales(data.custom);
+      }
+    } catch (error) {
+      console.error('Error fetching sales data:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to fetch sales data',
+        severity: 'error'
+      });
     }
   };
 
@@ -800,6 +888,58 @@ export default function AdminDashboard() {
                       <EditIcon fontSize="small" />
                     </IconButton>
                     <IconButton 
+                      color="success" 
+                      onClick={async () => {
+                        const newStatus = order.status === 'pending' ? 'in-progress' :
+                                        order.status === 'in-progress' ? 'completed' :
+                                        order.status === 'completed' ? 'paid' : 'pending';
+                        
+                        // Use local button state instead of global loading
+                        const btnEl = document.activeElement;
+                        if (btnEl) btnEl.disabled = true;
+                        
+                        try {
+                          // Fetch detailed order data first
+                          const response = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            }
+                          });
+                          
+                          const detailedOrder = response.data;
+                          console.log('Fetched detailed order data for quick update:', detailedOrder);
+                          
+                          // Create a copy of the order with the updated status
+                          const updatedOrder = {
+                            ...detailedOrder, 
+                            status: newStatus,
+                            items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
+                          };
+                          
+                          setCurrentOrder(detailedOrder);
+                          setEditedOrder(updatedOrder);
+                          
+                          // Call handleSaveOrder directly to update the status
+                          await handleSaveOrder();
+                        } catch (error) {
+                          console.error('Error updating order status:', error);
+                          setSnackbar({
+                            open: true,
+                            message: `Failed to update order status: ${error.message || 'Unknown error'}`,
+                            severity: 'error'
+                          });
+                        } finally {
+                          // Re-enable the button
+                          if (btnEl) btnEl.disabled = false;
+                        }
+                      }}
+                      title="Update Status"
+                      disabled={loading && false} // Ensure button isn't disabled by global loading
+                    >
+                      <CheckCircleIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton 
                       color="error" 
                       onClick={() => handleDeleteOrder(order.id)}
                       title="Delete Order"
@@ -823,14 +963,62 @@ export default function AdminDashboard() {
   );
 
   const renderSalesTab = () => {
-    // Sort waiters by total sales
-    const sortedWaiters = [...sales.waiterStats].sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
+    // Initialize waiterSalesMap with empty array if waiters is undefined
+    const waiterSalesMap = {};
     
-    // Create rank map
+    // First, initialize all waiters with zero sales
+    if (Array.isArray(waiters)) {
+      waiters.forEach(waiter => {
+        waiterSalesMap[waiter.id] = {
+          waiter_id: waiter.id,
+          waiter_name: waiter.username,
+          order_count: 0,
+          total_sales: 0,
+          avgOrder: 0
+        };
+      });
+    }
+    
+    // Then, update with actual sales data if available
+    if (Array.isArray(sales?.waiterStats)) {
+      sales.waiterStats.forEach(stat => {
+        if (waiterSalesMap[stat.waiter_id]) {
+          waiterSalesMap[stat.waiter_id] = {
+            ...stat,
+            avgOrder: stat.order_count > 0 ? stat.total_sales / stat.order_count : 0
+          };
+        }
+      });
+    }
+    
+    // Convert map to array and filter by selected waiter if needed
+    let filteredWaiters = Object.values(waiterSalesMap);
+    if (selectedWaiter !== 'all') {
+      filteredWaiters = filteredWaiters.filter(waiter => waiter.waiter_id === parseInt(selectedWaiter));
+    }
+    
+    // Sort by total sales
+    const sortedWaiters = filteredWaiters.sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
+    
+    // Create rank map based on total sales
     const rankMap = {};
-    sortedWaiters.forEach((waiter, index) => {
-      rankMap[waiter.waiter_id] = index + 1;
+    let currentRank = 1;
+    let previousSales = null;
+    let rankCount = 0;
+
+    sortedWaiters.forEach((waiter) => {
+      if (previousSales !== waiter.total_sales) {
+        currentRank += rankCount;
+        rankCount = 0;
+      }
+      rankCount++;
+      rankMap[waiter.waiter_id] = currentRank;
+      previousSales = waiter.total_sales;
     });
+
+    // Calculate filtered totals
+    const filteredTotalSales = sortedWaiters.reduce((sum, waiter) => sum + (waiter.total_sales || 0), 0);
+    const filteredOrderCount = sortedWaiters.reduce((sum, waiter) => sum + (waiter.order_count || 0), 0);
     
     return (
       <Box>
@@ -846,7 +1034,7 @@ export default function AdminDashboard() {
               {loading ? <CircularProgress size={24} /> : <RefreshIcon />}
             </IconButton>
           </Box>
-          <Box sx={{ display: 'flex', gap: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
             <FormControl sx={{ minWidth: 200 }}>
               <InputLabel>Time Range</InputLabel>
               <Select
@@ -859,8 +1047,23 @@ export default function AdminDashboard() {
                 <MenuItem value="weekly">Last 7 Days</MenuItem>
                 <MenuItem value="monthly">Last 30 Days</MenuItem>
                 <MenuItem value="yearly">Last 365 Days</MenuItem>
+                <MenuItem value="custom">Custom Date</MenuItem>
               </Select>
             </FormControl>
+            
+            {showCustomDatePicker && (
+              <LocalizationProvider dateAdapter={AdapterDateFns}>
+                <DatePicker
+                  label="Select Date"
+                  value={customDate}
+                  onChange={handleCustomDateChange}
+                  slotProps={{ textField: { size: 'small' } }}
+                  maxDate={new Date()}
+                  format="yyyy-MM-dd"
+                />
+              </LocalizationProvider>
+            )}
+
             <FormControl sx={{ minWidth: 200 }}>
               <InputLabel>Filter by Waiter</InputLabel>
               <Select
@@ -889,21 +1092,25 @@ export default function AdminDashboard() {
             <Paper sx={{ p: 3, mb: 3 }}>
               <Grid container spacing={3}>
                 <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">Total Sales</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedWaiter === 'all' ? 'Total Sales' : 'Filtered Sales'}
+                  </Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(sales.totalSales)}
+                    {formatCurrency(filteredTotalSales)}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">Orders Completed</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {selectedWaiter === 'all' ? 'Total Orders' : 'Filtered Orders'}
+                  </Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {sales.completedOrders}
+                    {filteredOrderCount}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
                   <Typography variant="body2" color="text.secondary">Average Order Value</Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(sales.completedOrders > 0 ? sales.totalSales / sales.completedOrders : 0)}
+                    {formatCurrency(filteredOrderCount > 0 ? filteredTotalSales / filteredOrderCount : 0)}
                   </Typography>
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
@@ -920,16 +1127,15 @@ export default function AdminDashboard() {
               </Grid>
             </Paper>
 
-            {sortedWaiters.length === 0 && (
+            {sortedWaiters.length === 0 ? (
               <Box sx={{ textAlign: 'center', py: 4, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
                 <Typography variant="h6" color="text.secondary" gutterBottom>
-                  No sales data available for this period
+                  No waiters found
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   This could be because:
-                  <br />1. There are no completed orders in this time period
-                  <br />2. The selected waiter has no sales
-                  <br />3. The data hasn't been loaded correctly
+                  <br />1. There are no waiters registered in the system
+                  <br />2. The data hasn't been loaded correctly
                 </Typography>
                 <Button 
                   variant="contained" 
@@ -941,25 +1147,25 @@ export default function AdminDashboard() {
                   Refresh Data
                 </Button>
               </Box>
-            )}
-
+            ) : (
             <Grid container spacing={3}>
               {sortedWaiters.map((waiter) => (
                 <Grid item xs={12} sm={6} md={4} key={waiter.waiter_id}>
                   <Paper 
                     sx={{
                       p: 3, 
-                      borderTop: `4px solid ${theme.palette.primary.main}`,
+                        borderTop: `4px solid ${waiter.total_sales > 0 ? theme.palette.primary.main : theme.palette.grey[400]}`,
                       boxShadow: 2,
                       height: '100%',
                       display: 'flex',
-                      flexDirection: 'column'
+                        flexDirection: 'column',
+                        opacity: waiter.total_sales > 0 ? 1 : 0.8
                     }}
                   >
                     <Typography variant="h6" gutterBottom color="text.primary">
                       {waiter.waiter_name}
                     </Typography>
-                    <Typography variant="h4" color="primary" sx={{ fontWeight: 'bold' }}>
+                      <Typography variant="h4" color={waiter.total_sales > 0 ? "primary" : "text.secondary"} sx={{ fontWeight: 'bold' }}>
                       {formatCurrency(waiter.total_sales)}
                     </Typography>
                     
@@ -994,7 +1200,7 @@ export default function AdminDashboard() {
                     }}>
                       <Chip
                         label={`Rank: ${rankMap[waiter.waiter_id]}`}
-                        color="primary"
+                          color={waiter.total_sales > 0 ? "primary" : "default"}
                         size="small"
                         sx={{ fontWeight: 'bold' }}
                       />
@@ -1003,6 +1209,7 @@ export default function AdminDashboard() {
                 </Grid>
               ))}
             </Grid>
+            )}
           </>
         )}
       </Box>
@@ -1117,12 +1324,14 @@ export default function AdminDashboard() {
               <Typography variant="h6">Order Summary</Typography>
               <Typography variant="h6">
                 Total: {formatCurrency(
-                  editedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+                  editedOrder.items && editedOrder.items.length > 0
+                    ? editedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+                    : 0
                 )}
               </Typography>
             </Box>
             
-            {editedOrder.items.length !== currentOrder?.items?.length && (
+            {editedOrder.items && currentOrder?.items && editedOrder.items.length !== currentOrder.items.length && (
               <Alert severity="warning" sx={{ mb: 2 }}>
                 You have removed items from this order. This action cannot be undone once saved.
               </Alert>

@@ -2091,107 +2091,162 @@ app.get('/api/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, 
 });
 
 // Admin-specific sales endpoint
-app.get('/api/admin/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, res) => {
-  const { timeRange } = req.params;
-  const { waiter_id } = req.query;
-  
-  // Validate time range
-  const validTimeRanges = ['daily', 'weekly', 'monthly', 'yearly'];
-  if (!validTimeRanges.includes(timeRange)) {
-    return res.status(400).json({ error: 'Invalid time range' });
-  }
-  
-  // Calculate date range
-  const now = new Date();
-  let startDate = new Date(now);
-  
-  switch(timeRange) {
-    case 'weekly':
-      startDate.setDate(startDate.getDate() - 7);
-      break;
-    case 'monthly':
-      startDate.setDate(startDate.getDate() - 30);
-      break;
-    case 'yearly':
-      startDate.setDate(startDate.getDate() - 365);
-      break;
-    default: // daily
-      startDate.setHours(0, 0, 0, 0);
-      now.setHours(23, 59, 59, 999);
-  }
-  
-  // Build the base query
-  let query = `
-    SELECT 
-      DATE(o.created_at) as date,
-      COUNT(DISTINCT o.id) as completedOrders,
-      SUM(o.total_amount) as totalSales,
-      u.id as waiter_id,
-      u.username as waiter_name,
-      COUNT(DISTINCT o.id) as order_count,
-      SUM(o.total_amount) as total_sales
-    FROM orders o
-    JOIN users u ON o.waiter_id = u.id
-    WHERE o.created_at BETWEEN datetime(?) AND datetime(?)
-    AND (o.status = 'completed' OR o.status = 'paid')
-  `;
-  
-  // Add waiter filter if specified
-  const params = [startDate.toISOString(), now.toISOString()];
-  if (waiter_id && waiter_id !== 'all') {
-    query += ' AND o.waiter_id = ?';
-    params.push(waiter_id);
-  }
-  
-  // Group by date and waiter
-  query += ' GROUP BY DATE(o.created_at), u.id, u.username ORDER BY o.created_at DESC';
-  
-  console.log('Executing admin sales query:', {
-    timeRange,
-    startDate: startDate.toISOString(),
-    endDate: now.toISOString(),
-    waiter_id,
-    query
-  });
-  
-  // Execute the query
-  db.all(query, params, (err, rows) => {
-    if (err) {
-      console.error('Error fetching admin sales:', err);
-      return res.status(500).json({ error: 'Database error' });
+app.get('/api/admin/sales/:timeRange', authenticateToken, checkRole(['admin']), async (req, res) => {
+  try {
+    const { timeRange } = req.params;
+    const { waiter_id, date } = req.query;
+
+    console.log('Admin sales request:', { timeRange, waiter_id, date });
+
+    // Validate timeRange
+    const validTimeRanges = ['daily', 'weekly', 'monthly', 'yearly', 'custom'];
+    if (!validTimeRanges.includes(timeRange)) {
+      return res.status(400).json({ error: 'Invalid time range' });
     }
-    
-    // Process the results
-    const salesByDate = {};
-    rows.forEach(row => {
-      if (!salesByDate[row.date]) {
-        salesByDate[row.date] = {
-          date: row.date,
-          totalSales: 0,
-          completedOrders: 0,
-          waiters: []
-        };
+
+    // Calculate date range based on timeRange
+    let startDate, endDate;
+    const now = new Date();
+    now.setHours(23, 59, 59, 999);
+
+    switch (timeRange) {
+      case 'daily':
+        startDate = new Date(now);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = now;
+        break;
+      case 'weekly':
+        startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - 7);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = now;
+        break;
+      case 'monthly':
+        startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - 30);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = now;
+        break;
+      case 'yearly':
+        startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - 365);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = now;
+        break;
+      case 'custom':
+        if (!date) {
+          return res.status(400).json({ error: 'Date parameter is required for custom time range' });
+        }
+        try {
+          startDate = new Date(date);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(date);
+          endDate.setHours(23, 59, 59, 999);
+        } catch (error) {
+          console.error('Error parsing custom date:', error);
+          return res.status(400).json({ error: 'Invalid date format' });
+        }
+        break;
+    }
+
+    // Build the SQL query with proper date handling
+    let query = `
+      WITH DateRange AS (
+        SELECT date(?) as start_date, date(?) as end_date
+      ),
+      WaiterStats AS (
+        SELECT 
+          u.id as waiter_id,
+          u.username as waiter_name,
+          COUNT(DISTINCT o.id) as order_count,
+          COALESCE(SUM(o.total_amount), 0) as total_sales
+        FROM users u
+        LEFT JOIN orders o ON o.waiter_id = u.id
+          AND o.status = 'completed'
+          AND date(o.created_at) BETWEEN (SELECT start_date FROM DateRange) AND (SELECT end_date FROM DateRange)
+        WHERE u.role = 'waiter'
+        ${waiter_id && waiter_id !== 'all' ? 'AND u.id = ?' : ''}
+        GROUP BY u.id, u.username
+      )
+      SELECT 
+        (SELECT COUNT(*) FROM orders o 
+         WHERE o.status = 'completed' 
+         AND date(o.created_at) BETWEEN (SELECT start_date FROM DateRange) AND (SELECT end_date FROM DateRange)
+         ${waiter_id && waiter_id !== 'all' ? 'AND o.waiter_id = ?' : ''}) as completed_orders,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM orders o 
+         WHERE o.status = 'completed' 
+         AND date(o.created_at) BETWEEN (SELECT start_date FROM DateRange) AND (SELECT end_date FROM DateRange)
+         ${waiter_id && waiter_id !== 'all' ? 'AND o.waiter_id = ?' : ''}) as total_sales,
+        (SELECT json_group_array(
+          json_object(
+            'waiter_id', waiter_id,
+            'waiter_name', waiter_name,
+            'order_count', order_count,
+            'total_sales', total_sales
+          )
+        ) FROM WaiterStats) as waiter_stats
+    `;
+
+    const queryParams = [
+      startDate.toISOString(),
+      endDate.toISOString()
+    ];
+
+    if (waiter_id && waiter_id !== 'all') {
+      queryParams.push(waiter_id, waiter_id, waiter_id);
+    }
+
+    console.log('Executing query:', query);
+    console.log('With params:', queryParams);
+
+    db.get(query, queryParams, (err, result) => {
+      if (err) {
+        console.error('Error executing query:', err);
+        return res.status(500).json({ error: 'Database error' });
       }
-      
-      salesByDate[row.date].totalSales += row.total_sales;
-      salesByDate[row.date].completedOrders += row.order_count;
-      salesByDate[row.date].waiters.push({
-        waiter_id: row.waiter_id,
-        waiter_name: row.waiter_name,
-        order_count: row.order_count,
-        total_sales: row.total_sales
-      });
+
+      // Process results
+      const salesData = {
+        totalSales: parseFloat(result?.total_sales || 0),
+        completedOrders: parseInt(result?.completed_orders || 0),
+        waiterStats: []
+      };
+
+      try {
+        if (result?.waiter_stats) {
+          salesData.waiterStats = JSON.parse(result.waiter_stats);
+        }
+      } catch (error) {
+        console.error('Error parsing waiter stats:', error);
+        salesData.waiterStats = [];
+      }
+
+      // If no waiters found, get all waiters with zero stats
+      if (salesData.waiterStats.length === 0) {
+        db.all('SELECT id, username FROM users WHERE role = "waiter"', [], (err, waiters) => {
+          if (err) {
+            console.error('Error fetching waiters:', err);
+            return res.status(500).json({ error: 'Database error' });
+          }
+
+          salesData.waiterStats = waiters.map(waiter => ({
+            waiter_id: waiter.id,
+            waiter_name: waiter.username,
+            order_count: 0,
+            total_sales: 0
+          }));
+
+          res.json({ [timeRange]: salesData });
+        });
+        return;
+      }
+
+      res.json({ [timeRange]: salesData });
     });
-    
-    // Convert to array and sort by date
-    const result = Object.values(salesByDate).sort((a, b) => 
-      new Date(b.date) - new Date(a.date)
-    );
-    
-    res.json({
-      [timeRange]: result
-    });
-  });
+  } catch (error) {
+    console.error('Error fetching admin sales:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Use proxy routes
