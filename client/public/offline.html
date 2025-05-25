@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - POS System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #e3f0ff 0%, #f9e7ff 100%);
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            width: 90%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        p {
+            color: #666;
+            margin-bottom: 2rem;
+        }
+        .status {
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            font-weight: bold;
+        }
+        .offline {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .online {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+            display: none;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 0.5rem;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>POS System</h1>
+        <div id="connection-status" class="status offline">Checking connection...</div>
+        <p>You are currently offline. Some features may be limited.</p>
+        <div id="error-message" class="error"></div>
+        <button onclick="window.location.reload()">Try Again</button>
+        <button onclick="window.location.href='/'">Continue Offline</button>
+    </div>
+
+    <script>
+        // Check connection status
+        function updateConnectionStatus() {
+            const statusElement = document.getElementById('connection-status');
+            const errorElement = document.getElementById('error-message');
+            
+            if (navigator.onLine) {
+                statusElement.textContent = 'Online - Redirecting...';
+                statusElement.className = 'status online';
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
+            } else {
+                statusElement.textContent = 'Offline';
+                statusElement.className = 'status offline';
+            }
+        }
+
+        // Handle network errors
+        window.addEventListener('error', (event) => {
+            if (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK') {
+                const errorElement = document.getElementById('error-message');
+                errorElement.textContent = 'Some resources failed to load. The app may work with limited functionality.';
+                errorElement.style.display = 'block';
+            }
+        });
+
+        // Update status on load and when connection changes
+        window.addEventListener('load', updateConnectionStatus);
+        window.addEventListener('online', updateConnectionStatus);
+        window.addEventListener('offline', updateConnectionStatus);
+
+        // Check if we have cached data
+        if ('caches' in window) {
+            caches.match('/')
+                .then(response => {
+                    if (response) {
+                        console.log('App is available offline');
+                    }
+                })
+                .catch(error => {
+                    console.error('Cache check failed:', error);
+                });
+        }
+    </script>
+</body>
+</html> 

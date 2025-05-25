@@ -52,6 +52,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { useNavigate } from 'react-router-dom';
+import Footer from '../../components/Footer';
 
 // Add API URL constant
 const API_URL = 'http://localhost:5001/api';
@@ -59,13 +60,32 @@ const API_URL = 'http://localhost:5001/api';
 // Add fetchOrdersData helper function
 const fetchOrdersData = async (token) => {
   try {
+    // First get all orders
     const response = await axios.get('http://localhost:5001/api/orders', {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     });
-    return response.data;
+    
+    // For each order, fetch its items
+    const ordersWithItems = await Promise.all(response.data.map(async (order) => {
+      try {
+        const detailedOrder = await fetchOrderWithItems(order.id, token);
+        return {
+          ...detailedOrder,
+          items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
+        };
+      } catch (error) {
+        console.error(`Error fetching items for order ${order.id}:`, error);
+        return {
+          ...order,
+          items: []
+        };
+      }
+    }));
+
+    return ordersWithItems;
   } catch (error) {
     console.error('Error fetching orders:', error);
     return [];
@@ -88,6 +108,47 @@ const fetchWaitersData = async (token) => {
   }
 };
 
+// Helper to always fetch order with items
+const fetchOrderWithItems = async (orderId, token) => {
+  try {
+    console.log('Fetching order details for order:', orderId);
+    const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    let order = response.data;
+    console.log('Initial order data:', order);
+
+    // Always fetch items separately to ensure we have the complete data
+    try {
+      console.log('Fetching items for order:', orderId);
+      const itemsRes = await axios.get(`http://localhost:5001/api/orders/${orderId}/items`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      console.log('Items response:', itemsRes.data);
+      
+      // Ensure items is always an array
+      const items = Array.isArray(itemsRes.data) ? itemsRes.data : [];
+      order = { ...order, items };
+      
+      console.log('Final order data with items:', order);
+      return order;
+    } catch (itemsError) {
+      console.error('Error fetching order items:', itemsError);
+      // Return order with empty items array if items fetch fails
+      return { ...order, items: [] };
+    }
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    throw error;
+  }
+};
+
 export default function AdminDashboard() {
   const theme = useTheme();
   const token = useSelector((state) => state.auth.token);
@@ -95,6 +156,8 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
   const [filteredOrders, setFilteredOrders] = useState([]);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage] = useState(20);
   const [sales, setSales] = useState({
     totalSales: 0,
     completedOrders: 0,
@@ -477,39 +540,28 @@ export default function AdminDashboard() {
   // Order editing functions
   const handleEditOrder = async (orderId) => {
     console.log('Editing order:', orderId);
-    
     try {
       setLoading(true);
       
-      // Fetch detailed order data including items
-      const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      // Fetch the detailed order data
+      const detailedOrder = await fetchOrderWithItems(orderId, token);
+      console.log('Fetched detailed order data:', detailedOrder);
       
-      const orderToEdit = response.data;
-    
-    if (orderToEdit) {
-        console.log('Fetched detailed order data:', orderToEdit);
-        
-        // Ensure items is always an array
-        const orderWithItems = {
-          ...orderToEdit,
-          items: Array.isArray(orderToEdit.items) ? orderToEdit.items : []
-        };
-        
-        setCurrentOrder(orderWithItems);
-        setEditedOrder({...orderWithItems});
-      setEditDialogOpen(true);
-    } else {
-      setSnackbar({
-        open: true,
-        message: `Order #${orderId} not found`,
-        severity: 'error'
-      });
+      if (!detailedOrder) {
+        throw new Error(`Order #${orderId} not found`);
       }
+      
+      // Ensure items is always an array
+      const orderWithItems = {
+        ...detailedOrder,
+        items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
+      };
+      
+      console.log('Setting order data for editing:', orderWithItems);
+      setCurrentOrder(orderWithItems);
+      setEditedOrder(orderWithItems);
+      setEditDialogOpen(true);
+      
     } catch (error) {
       console.error('Error fetching order details:', error);
       setSnackbar({
@@ -705,6 +757,11 @@ export default function AdminDashboard() {
     }
   };
 
+  // Add pagination handler
+  const handleChangePage = (event, newPage) => {
+    setPage(newPage);
+  };
+
   const renderOrdersTab = () => (
     <Box>
       <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
@@ -841,6 +898,7 @@ export default function AdminDashboard() {
         <Table>
           <TableHead sx={{ bgcolor: theme.palette.primary.main }}>
             <TableRow>
+              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}></TableCell>
               <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Order ID</TableCell>
               <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Waiter</TableCell>
               <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Date</TableCell>
@@ -852,114 +910,196 @@ export default function AdminDashboard() {
           </TableHead>
           <TableBody>
             {Array.isArray(filteredOrders) && filteredOrders.length > 0 ? (
-              filteredOrders.map((order) => (
-                <TableRow key={order.id} hover>
-                  <TableCell>{order.id}</TableCell>
-                  <TableCell>{order.waiter_name || 'N/A'}</TableCell>
-                  <TableCell>{new Date(order.created_at).toLocaleString()}</TableCell>
-                  <TableCell>
-                    <Button
-                      size="small"
-                      startIcon={<ViewListIcon />}
-                      variant="outlined"
-                      onClick={() => handleEditOrder(order.id)}
-                    >
-                      View Items
-                    </Button>
-                  </TableCell>
-                  <TableCell sx={{ fontWeight: 'bold' }}>{formatCurrency(order.total_amount || 0)}</TableCell>
-                  <TableCell>
-                    <Chip 
-                      label={order.status || 'pending'} 
-                      color={
-                        order.status === 'completed' || order.status === 'paid' ? 'success' :
-                        order.status === 'in-progress' ? 'warning' :
-                        order.status === 'cancelled' ? 'error' : 'default'
-                      }
-                      size="small"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <IconButton 
-                      color="primary" 
-                      onClick={() => handleEditOrder(order.id)}
-                      title="Edit Order"
-                    >
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton 
-                      color="success" 
-                      onClick={async () => {
-                        const newStatus = order.status === 'pending' ? 'in-progress' :
-                                        order.status === 'in-progress' ? 'completed' :
-                                        order.status === 'completed' ? 'paid' : 'pending';
-                        
-                        // Use local button state instead of global loading
-                        const btnEl = document.activeElement;
-                        if (btnEl) btnEl.disabled = true;
-                        
-                        try {
-                          // Fetch detailed order data first
-                          const response = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
-                            headers: {
-                              'Authorization': `Bearer ${token}`,
-                              'Content-Type': 'application/json'
+              filteredOrders
+                .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                .map((order) => (
+                  <React.Fragment key={order.id}>
+                    <TableRow hover>
+                      <TableCell>
+                        <IconButton
+                          size="small"
+                          onClick={() => {
+                            const expandedRows = document.querySelectorAll(`.expanded-row-${order.id}`);
+                            expandedRows.forEach(row => {
+                              row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+                            });
+                          }}
+                        >
+                          <AddIcon fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                      <TableCell>{order.id}</TableCell>
+                      <TableCell>{order.waiter_name || 'N/A'}</TableCell>
+                      <TableCell>{new Date(order.created_at).toLocaleString()}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="text.secondary">
+                          {order.items?.length || 0} items
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }}>{formatCurrency(order.total_amount || 0)}</TableCell>
+                      <TableCell>
+                        <Chip 
+                          label={order.status || 'pending'} 
+                          color={
+                            order.status === 'completed' || order.status === 'paid' ? 'success' :
+                            order.status === 'in-progress' ? 'warning' :
+                            order.status === 'cancelled' ? 'error' : 'default'
+                          }
+                          size="small"
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <IconButton 
+                          color="primary" 
+                          onClick={() => handleEditOrder(order.id)}
+                          title="Edit Order"
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton 
+                          color="success" 
+                          onClick={async () => {
+                            const newStatus = order.status === 'pending' ? 'in-progress' :
+                                            order.status === 'in-progress' ? 'completed' :
+                                            order.status === 'completed' ? 'paid' : 'pending';
+                            
+                            const btnEl = document.activeElement;
+                            if (btnEl) btnEl.disabled = true;
+                            
+                            try {
+                              const detailedOrder = await fetchOrderWithItems(order.id, token);
+                              console.log('Fetched detailed order data for quick update:', detailedOrder);
+                              
+                              const updatedOrder = {
+                                ...detailedOrder, 
+                                status: newStatus,
+                                items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
+                              };
+                              
+                              setCurrentOrder(detailedOrder);
+                              setEditedOrder(updatedOrder);
+                              
+                              await handleSaveOrder();
+                            } catch (error) {
+                              console.error('Error updating order status:', error);
+                              setSnackbar({
+                                open: true,
+                                message: `Failed to update order status: ${error.message || 'Unknown error'}`,
+                                severity: 'error'
+                              });
+                            } finally {
+                              if (btnEl) btnEl.disabled = false;
                             }
-                          });
-                          
-                          const detailedOrder = response.data;
-                          console.log('Fetched detailed order data for quick update:', detailedOrder);
-                          
-                          // Create a copy of the order with the updated status
-                          const updatedOrder = {
-                            ...detailedOrder, 
-                            status: newStatus,
-                            items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
-                          };
-                          
-                          setCurrentOrder(detailedOrder);
-                          setEditedOrder(updatedOrder);
-                          
-                          // Call handleSaveOrder directly to update the status
-                          await handleSaveOrder();
-                        } catch (error) {
-                          console.error('Error updating order status:', error);
-                          setSnackbar({
-                            open: true,
-                            message: `Failed to update order status: ${error.message || 'Unknown error'}`,
-                            severity: 'error'
-                          });
-                        } finally {
-                          // Re-enable the button
-                          if (btnEl) btnEl.disabled = false;
-                        }
-                      }}
-                      title="Update Status"
-                      disabled={loading && false} // Ensure button isn't disabled by global loading
-                    >
-                      <CheckCircleIcon fontSize="small" />
-                    </IconButton>
-                    <IconButton 
-                      color="error" 
-                      onClick={() => handleDeleteOrder(order.id)}
-                      title="Delete Order"
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
-              ))
+                          }}
+                          title="Update Status"
+                          disabled={loading && false}
+                        >
+                          <CheckCircleIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton 
+                          color="error" 
+                          onClick={() => handleDeleteOrder(order.id)}
+                          title="Delete Order"
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                    {/* Expanded row for items */}
+                    <TableRow className={`expanded-row-${order.id}`} sx={{ display: 'none', bgcolor: 'action.hover' }}>
+                      <TableCell colSpan={8}>
+                        <Box sx={{ p: 2 }}>
+                          <Typography variant="subtitle2" gutterBottom>Order Items:</Typography>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow>
+                                <TableCell>Item Name</TableCell>
+                                <TableCell>Type</TableCell>
+                                <TableCell align="center">Quantity</TableCell>
+                                <TableCell align="right">Price</TableCell>
+                                <TableCell align="right">Subtotal</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {order.items && order.items.map((item, index) => (
+                                <TableRow key={index}>
+                                  <TableCell>{item.name}</TableCell>
+                                  <TableCell>
+                                    <Chip
+                                      label={item.item_type || 'food'}
+                                      size="small"
+                                      color={item.item_type === 'food' ? 'secondary' : 'primary'}
+                                    />
+                                  </TableCell>
+                                  <TableCell align="center">{item.quantity}</TableCell>
+                                  <TableCell align="right">{formatCurrency(item.price)}</TableCell>
+                                  <TableCell align="right">{formatCurrency(item.price * item.quantity)}</TableCell>
+                                </TableRow>
+                              ))}
+                              <TableRow>
+                                <TableCell colSpan={4} align="right" sx={{ fontWeight: 'bold' }}>Total:</TableCell>
+                                <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+                                  {formatCurrency(order.items?.reduce((sum, item) => sum + (item.price * item.quantity), 0) || 0)}
+                                </TableCell>
+                              </TableRow>
+                            </TableBody>
+                          </Table>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  </React.Fragment>
+                ))
             ) : (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography>No orders found</Typography>
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
+        {/* Add pagination controls */}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Showing {page * rowsPerPage + 1} to {Math.min((page + 1) * rowsPerPage, filteredOrders.length)} of {filteredOrders.length} orders
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+            >
+              First
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setPage(page - 1)}
+              disabled={page === 0}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setPage(page + 1)}
+              disabled={page >= Math.ceil(filteredOrders.length / rowsPerPage) - 1}
+            >
+              Next
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => setPage(Math.ceil(filteredOrders.length / rowsPerPage) - 1)}
+              disabled={page >= Math.ceil(filteredOrders.length / rowsPerPage) - 1}
+            >
+              Last
+            </Button>
+          </Box>
+        </Box>
       </TableContainer>
-            </Box>
+    </Box>
   );
 
   const renderSalesTab = () => {
@@ -1230,6 +1370,8 @@ export default function AdminDashboard() {
       <DialogContent dividers>
         {editedOrder ? (
           <Box>
+            {/* Debug log for items */}
+            {console.log('Editing order items:', editedOrder.items)}
             <Grid container spacing={2} sx={{ mb: 3 }}>
               <Grid item xs={12} sm={6} md={3}>
                 <Typography variant="subtitle2" color="text.secondary">Order ID</Typography>
@@ -1278,26 +1420,26 @@ export default function AdminDashboard() {
                   {editedOrder.items && editedOrder.items.length > 0 ? (
                     editedOrder.items.map((item) => (
                       <TableRow key={item.id}>
-                        <TableCell>{item.name}</TableCell>
-                      <TableCell>
-                        <Chip
+                        <TableCell>{item.name || <i>Unknown Item</i>}</TableCell>
+                        <TableCell>
+                          <Chip
                             label={item.item_type || 'food'} 
-                          size="small"
+                            size="small"
                             color={item.item_type === 'food' ? 'secondary' : 'primary'}
-                        />
-                      </TableCell>
-                      <TableCell align="center">
+                          />
+                        </TableCell>
+                        <TableCell align="center">
                           <TextField
                             type="number"
-                          size="small"
+                            size="small"
                             value={item.quantity}
                             onChange={(e) => handleUpdateItem(item.id, 'quantity', parseInt(e.target.value) || 1)}
                             InputProps={{ inputProps: { min: 1 } }}
                             sx={{ width: '60px' }}
-                        />
-                      </TableCell>
-                        <TableCell align="right">{formatCurrency(item.price)}</TableCell>
-                        <TableCell align="right">{formatCurrency(item.price * item.quantity)}</TableCell>
+                          />
+                        </TableCell>
+                        <TableCell align="right">{formatCurrency(item.price ?? 0)}</TableCell>
+                        <TableCell align="right">{formatCurrency((item.price ?? 0) * (item.quantity ?? 1))}</TableCell>
                         <TableCell align="center">
                           <IconButton 
                             size="small" 
@@ -1306,8 +1448,8 @@ export default function AdminDashboard() {
                           >
                             <RemoveCircleIcon fontSize="small" />
                           </IconButton>
-                      </TableCell>
-                    </TableRow>
+                        </TableCell>
+                      </TableRow>
                     ))
                   ) : (
                     <TableRow>
@@ -1372,7 +1514,14 @@ export default function AdminDashboard() {
   }
 
   return (
-    <Box>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        bgcolor: 'background.default'
+      }}
+    >
       <Typography variant="h4" gutterBottom>
         Admin Dashboard
       </Typography>
@@ -1401,6 +1550,7 @@ export default function AdminDashboard() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+      <Footer />
     </Box>
   );
 } 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
 import {
@@ -138,6 +138,7 @@ export default function Receipt() {
   const navigate = useNavigate();
   const theme = useTheme();
   const token = useSelector((state) => state.auth.token);
+  const location = useLocation();
   
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -148,10 +149,57 @@ export default function Receipt() {
     const fetchReceiptData = async () => {
       try {
         setLoading(true);
+        
+        // Check if we have order data from navigation state
+        if (location.state?.orderData) {
+          const orderData = location.state.orderData;
+          const items = orderData.items || [];
+          
+          // Calculate subtotal
+          const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+          const tax = subtotal * 0.085; // 8.5% tax
+          const serviceCharge = subtotal * 0.1; // 10% service charge
+          const total = subtotal + tax + serviceCharge;
+          
+          // Format the receipt data
+          const receiptData = {
+            id: orderData.id,
+            date: new Date(orderData.created_at).toLocaleString(),
+            table: orderData.table_number || 'N/A',
+            waiter: orderData.waiter_name || 'N/A',
+            status: orderData.status || 'pending',
+            items: items.map(item => ({
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price,
+              item_type: item.item_type || 'food',
+              subtotal: item.price * item.quantity
+            })),
+            subtotal,
+            tax,
+            serviceCharge,
+            total,
+            paymentMethod: 'Cash',
+            paymentStatus: orderData.status === 'paid' ? 'Paid' : 'Pending'
+          };
+          
+          setReceipt(receiptData);
+          setLoading(false);
+          return;
+        }
+
+        // If no order data in state, fetch from API
+        const token = localStorage.getItem('token');
+        if (!token) {
+          throw new Error('No authentication token found');
+        }
+
         // Fetch the order details
         const orderResponse = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
           headers: {
-            Authorization: `Bearer ${token}`
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
           }
         });
         
@@ -188,21 +236,27 @@ export default function Receipt() {
           tax,
           serviceCharge,
           total,
-          paymentMethod: 'Cash', // Default or you could fetch from payment data
+          paymentMethod: 'Cash',
           paymentStatus: orderData.status === 'paid' ? 'Paid' : 'Pending'
         };
         
         setReceipt(receiptData);
-          setLoading(false);
+        setLoading(false);
       } catch (err) {
         console.error('Failed to fetch receipt data:', err);
-        setError('Failed to load receipt data: ' + (err.response?.data?.error || err.message));
+        if (err.response?.status === 401 || err.response?.status === 403) {
+          // Token expired or invalid
+          localStorage.removeItem('token');
+          navigate('/login');
+        } else {
+          setError('Failed to load receipt data: ' + (err.response?.data?.error || err.message));
+        }
         setLoading(false);
       }
     };
     
     fetchReceiptData();
-  }, [orderId, token]);
+  }, [orderId, token, navigate, location.state]);
   
   const handlePrint = () => {
     // Create a printable version of the receipt
@@ -211,7 +265,103 @@ export default function Receipt() {
       alert('Please allow pop-ups to print receipt');
       return;
     }
-    
+
+    // Separate items by type
+    const foodItems = receipt.items.filter(item => item.item_type === 'food');
+    const drinkItems = receipt.items.filter(item => item.item_type === 'drink');
+
+    // Function to generate receipt HTML
+    const generateReceiptHTML = (items, title, isStaffCopy = false) => {
+      const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const tax = subtotal * 0.085;
+      const serviceCharge = subtotal * 0.1;
+      const total = subtotal + tax + serviceCharge;
+
+      return `
+        <div class="receipt">
+          <div class="header">
+            <h1>MY RESTAURANT</h1>
+            <p>123 Restaurant St, Foodville, FC 12345</p>
+            <p>Tel: (123) 456-7890</p>
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="detail">
+            <div>Receipt #:</div>
+            <div>${receipt.id}</div>
+          </div>
+          <div class="detail">
+            <div>Date: ${receipt.date.split(',')[0]}</div>
+            <div>Time: ${receipt.date.split(',')[1].trim()}</div>
+          </div>
+          <div class="detail">
+            <div>Table: ${receipt.table}</div>
+            <div>Waiter: ${receipt.waiter}</div>
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div style="margin-bottom: 4mm;">
+            <div class="item" style="font-weight: bold; margin-bottom: 3mm;">
+              <div class="item-details">
+                <div class="item-name"><strong>Item</strong></div>
+                <div class="item-qty"><strong>Qty</strong></div>
+                <div class="item-price"><strong>Price</strong></div>
+              </div>
+            </div>
+            
+            ${items.map(item => `
+              <div class="item">
+                <div class="item-details">
+                  <div class="item-name">${item.name}</div>
+                  <div class="item-qty">${item.quantity}</div>
+                  <div class="item-price">$${item.price.toFixed(2)}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="subtotal">
+            <div>Subtotal:</div>
+            <div>$${subtotal.toFixed(2)}</div>
+          </div>
+          <div class="subtotal">
+            <div>Tax (8.5%):</div>
+            <div>$${tax.toFixed(2)}</div>
+          </div>
+          <div class="subtotal">
+            <div>Service (10%):</div>
+            <div>$${serviceCharge.toFixed(2)}</div>
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="total">
+            <div>TOTAL:</div>
+            <div>$${total.toFixed(2)}</div>
+          </div>
+          
+          <div class="payment-status">
+            ${receipt.paymentStatus}
+          </div>
+          <div style="text-align: center; font-size: 9px; margin: 2mm 0;">
+            Payment Method: ${receipt.paymentMethod}
+          </div>
+          
+          <div class="divider"></div>
+          
+          <div class="footer">
+            <div>${title}</div>
+            <div>${new Date().toLocaleDateString()}</div>
+            <div style="margin-top: 3mm; font-weight: bold;">${isStaffCopy ? '**** STAFF COPY ****' : '**** CUSTOMER COPY ****'}</div>
+          </div>
+        </div>
+      `;
+    };
+
     // Add the content to the new window
     printWindow.document.write(`
       <html>
@@ -232,10 +382,10 @@ export default function Receipt() {
               background-color: white;
             }
             body {
-              font-family: 'Courier New', monospace; /* Use monospaced font for thermal printers */
+              font-family: 'Courier New', monospace;
               margin: 0;
               padding: 4mm 2mm;
-              width: 58mm; /* Standard thermal receipt width */
+              width: 58mm;
             }
             .receipt {
               padding: 3mm;
@@ -243,6 +393,7 @@ export default function Receipt() {
               max-width: 54mm;
               overflow-x: hidden;
               box-sizing: border-box;
+              page-break-after: always;
             }
             .header {
               text-align: center;
@@ -339,95 +490,14 @@ export default function Receipt() {
           </style>
         </head>
         <body onload="window.print();">
-          <div class="receipt">
-            <div class="header">
-              <h1>MY RESTAURANT</h1>
-              <p>123 Restaurant St, Foodville, FC 12345</p>
-              <p>Tel: (123) 456-7890</p>
-            </div>
-            
-            <div class="divider"></div>
-            
-            <div class="detail">
-              <div>Receipt #:</div>
-              <div>${receipt.id}</div>
-            </div>
-            <div class="detail">
-              <div>Date: ${receipt.date.split(',')[0]}</div>
-              <div>Time: ${receipt.date.split(',')[1].trim()}</div>
-            </div>
-            <div class="detail">
-              <div>Table: ${receipt.table}</div>
-              <div>Waiter: ${receipt.waiter}</div>
-            </div>
-            
-            <div class="divider"></div>
-            
-            <div style="margin-bottom: 4mm;">
-              <div class="item" style="font-weight: bold; margin-bottom: 3mm;">
-                <div class="item-details">
-                  <div class="item-name"><strong>Item</strong></div>
-                  <div class="item-qty"><strong>Qty</strong></div>
-                  <div class="item-price"><strong>Price</strong></div>
-                </div>
-              </div>
-              
-              ${receipt.items.map(item => `
-                <div class="item">
-                  <div class="item-details">
-                    <div class="item-name">${item.name}</div>
-                    <div class="item-qty">${item.quantity}</div>
-                    <div class="item-price">$${item.price.toFixed(2)}</div>
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-            
-            <div class="divider"></div>
-            
-            <div class="subtotal">
-              <div>Subtotal:</div>
-              <div>$${receipt.subtotal.toFixed(2)}</div>
-            </div>
-            <div class="subtotal">
-              <div>Tax (8.5%):</div>
-              <div>$${receipt.tax.toFixed(2)}</div>
-            </div>
-            <div class="subtotal">
-              <div>Service (10%):</div>
-              <div>$${receipt.serviceCharge.toFixed(2)}</div>
-            </div>
-            
-            <div class="divider"></div>
-            
-            <div class="total">
-              <div>TOTAL:</div>
-              <div>$${receipt.total.toFixed(2)}</div>
-            </div>
-            
-            <div class="payment-status">
-              ${receipt.paymentStatus}
-            </div>
-            <div style="text-align: center; font-size: 9px; margin: 2mm 0;">
-              Payment Method: ${receipt.paymentMethod}
-            </div>
-            
-            <div class="divider"></div>
-            
-            <div class="footer">
-              <div>Thank you for dining with us!</div>
-              <div>${new Date().toLocaleDateString()}</div>
-              <div style="margin-top: 3mm; font-weight: bold;">**** CUSTOMER COPY ****</div>
-            </div>
-          </div>
+          ${generateReceiptHTML(receipt.items, 'CUSTOMER RECEIPT')}
+          ${foodItems.length > 0 ? generateReceiptHTML(foodItems, 'KITCHEN COPY', true) : ''}
+          ${drinkItems.length > 0 ? generateReceiptHTML(drinkItems, 'BAR COPY', true) : ''}
         </body>
       </html>
     `);
     
     printWindow.document.close();
-    
-    // Auto-print immediately when loaded
-    // The onload event in the HTML will trigger printing
   };
   
   const handleEmailReceipt = () => {
@@ -437,14 +507,19 @@ export default function Receipt() {
   
   const handlePlaceOrder = async () => {
     try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
       // Update the existing order's status
       const response = await axios.put(`http://localhost:5001/api/orders/${receipt.id}/status`, {
         status: 'pending',
         total_amount: receipt.total,
-        payment_amount: receipt.total // Include payment amount for consistency
+        payment_amount: receipt.total
       }, {
         headers: {
-          Authorization: `Bearer ${token}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
@@ -468,15 +543,21 @@ export default function Receipt() {
       });
     } catch (err) {
       console.error('Failed to place order:', err);
-      const errorMessage = err.response?.data?.error || err.message;
-      setError('Failed to place order: ' + errorMessage);
-      
-      // Show error snackbar
-      setSnackbar({
-        open: true,
-        message: `Failed to place order: ${errorMessage}`,
-        severity: 'error'
-      });
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        // Token expired or invalid
+        localStorage.removeItem('token');
+        navigate('/login');
+      } else {
+        const errorMessage = err.response?.data?.error || err.message;
+        setError('Failed to place order: ' + errorMessage);
+        
+        // Show error snackbar
+        setSnackbar({
+          open: true,
+          message: `Failed to place order: ${errorMessage}`,
+          severity: 'error'
+        });
+      }
     }
   };
   

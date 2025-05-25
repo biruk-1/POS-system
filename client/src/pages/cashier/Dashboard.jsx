@@ -66,6 +66,7 @@ import {
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 import * as offlineService from '../../services/offlineService';
+import Footer from '../../components/Footer';
 
 export default function CashierDashboard() {
   const navigate = useNavigate();
@@ -177,10 +178,18 @@ export default function CashierDashboard() {
 
   // Setup online/offline listeners
   useEffect(() => {
-    const handleOnline = () => {
+    const handleOnline = async () => {
       setIsOffline(false);
-      setSyncStatus({ syncing: true, message: 'Reconnected! Syncing data...' });
-      syncOfflineData();
+      setSyncStatus('Connected');
+      
+      try {
+        // Sync offline data with server
+        await offlineService.syncWithServer();
+        setSyncStatus('Data synchronized successfully');
+      } catch (error) {
+        console.error('Error syncing offline data:', error);
+        setSyncStatus('Error syncing data. Will retry automatically.');
+      }
     };
     
     const handleOffline = () => {
@@ -1085,7 +1094,14 @@ export default function CashierDashboard() {
   }
 
   return (
-    <Box>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        bgcolor: 'background.default'
+      }}
+    >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" fontWeight="bold" color={theme.palette.roles.cashier}>
           Cashier Dashboard
@@ -1390,6 +1406,7 @@ export default function CashierDashboard() {
           {snackbar.message}
         </Alert>
       </Snackbar>
+      <Footer />
     </Box>
   );
 }

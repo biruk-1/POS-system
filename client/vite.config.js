@@ -11,9 +11,10 @@ export default defineConfig({
       allow: ['..']
     },
     proxy: {
-      '/ai': 'http://localhost:5001',
-      '/extensions': 'http://localhost:5001',
-      '/languages': 'http://localhost:5001'
+      '/api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true
+      }
     }
   },
   build: {

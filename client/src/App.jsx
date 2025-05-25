@@ -1,3 +1,4 @@
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { UNSAFE_DataRouterContext, UNSAFE_DataRouterStateContext } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
@@ -5,6 +6,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { useSelector } from 'react-redux';
 import { Provider } from 'react-redux';
 import store from './store';
+import { initializeOfflineFunctionality } from './services/initService';
 
 // Auth Pages
 import Login from './pages/Login';
@@ -48,6 +50,9 @@ import KitchenView from './pages/kitchen/KitchenView';
 // Bartender Pages
 import BartenderDashboard from './pages/bartender/Dashboard';
 import BartenderView from './pages/bartender/BartenderView';
+
+// Offline Page
+import OfflinePage from './pages/OfflinePage';
 
 // Enhanced theme configuration
 const theme = createTheme({
@@ -187,6 +192,17 @@ const router = {
 function App() {
   const { token, user } = useSelector((state) => state.auth);
 
+  useEffect(() => {
+    // Initialize offline functionality
+    initializeOfflineFunctionality().then(success => {
+      if (success) {
+        console.log('Offline functionality initialized successfully');
+      } else {
+        console.error('Failed to initialize offline functionality');
+      }
+    });
+  }, []);
+
   // Protected route component
   const ProtectedRoute = ({ children, allowedRoles }) => {
     if (!token) {
@@ -290,6 +306,9 @@ function App() {
               <Route index element={<BartenderView />} />
               <Route path="dashboard" element={<BartenderDashboard />} />
             </Route>
+            
+            {/* Offline Page */}
+            <Route path="/offline" element={<OfflinePage />} />
             
             {/* Catch all - redirects to login */}
             <Route path="*" element={<Navigate to="/login" replace />} />

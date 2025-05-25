@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
-import io from 'socket.io-client';
-import * as offlineService from '../../services/offlineService';
 import {
   Typography,
   Grid,
@@ -25,22 +23,68 @@ import {
   MenuItem,
   Tab,
   Tabs,
-  Chip
+  Chip,
+  Container,
+  CircularProgress
 } from '@mui/material';
 import {
   Add as AddIcon,
   Remove as RemoveIcon,
   ShoppingCart as CartIcon,
   Delete as DeleteIcon,
-  Print as PrintIcon
+  Print as PrintIcon,
+  Save as SaveIcon,
+  Receipt as ReceiptIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 import { useNavigate } from 'react-router-dom';
+import { socket } from '../../services/socket';
+import { 
+  getMenuItemsOffline, 
+  getTablesOffline,
+  saveOrderOffline,
+  saveReceiptOffline,
+  isOnline,
+  saveMenuItemsOffline,
+  saveTablesOffline,
+  saveUsersData
+} from '../../services/offlineService';
+import { userOperations } from '../../services/db';
+import { API_ENDPOINTS } from '../../config/api';
+
+// Create axios instance with base URL
+const api = axios.create({
+  baseURL: API_ENDPOINTS.ITEMS.split('/api')[0],
+  headers: {
+    'Content-Type': 'application/json'
+  }
+});
+
+// Add request interceptor to add token
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor to handle errors
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('API Error:', error.response?.data || error.message);
+    return Promise.reject(error);
+  }
+);
 
 export default function OrderEntry() {
   const user = useSelector((state) => state.auth.user);
-  const token = localStorage.getItem('token');
-  
   const [items, setItems] = useState([]);
   const [cart, setCart] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,105 +93,100 @@ export default function OrderEntry() {
   const [waiterId, setWaiterId] = useState('');
   const [waiters, setWaiters] = useState([]);
   const [activeTab, setActiveTab] = useState('all');
-  
-  // Add offline state
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const [syncStatus, setSyncStatus] = useState('');
+  const [offlineMode, setOfflineMode] = useState(false);
   
   const navigate = useNavigate();
-  
-  // Fetch items on component mount
+
   useEffect(() => {
-    const fetchItems = async () => {
+    const checkOnlineStatus = () => {
+      const online = isOnline();
+      setOfflineMode(!online);
+    };
+
+    checkOnlineStatus();
+    window.addEventListener('online', checkOnlineStatus);
+    window.addEventListener('offline', checkOnlineStatus);
+
+    return () => {
+      window.removeEventListener('online', checkOnlineStatus);
+      window.removeEventListener('offline', checkOnlineStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    const loadData = async () => {
       try {
         setLoading(true);
-        const response = await axios.get('http://localhost:5001/api/items', {
-          headers: {
-            Authorization: `Bearer ${token}`
+        setError('');
+
+        if (offlineMode) {
+          // Load data from IndexedDB
+          const [offlineItems, offlineTables, offlineWaiters] = await Promise.all([
+            getMenuItemsOffline(),
+            getTablesOffline(),
+            userOperations.getAllUsers()
+          ]);
+
+          // Ensure items is an array
+          setItems(Array.isArray(offlineItems) ? offlineItems : []);
+          
+          // Filter waiters from all users and ensure it's an array
+          const waitersList = Array.isArray(offlineWaiters) 
+            ? offlineWaiters.filter(user => user.role === 'waiter')
+            : [];
+          setWaiters(waitersList);
+
+          console.log('Loaded offline waiters:', waitersList);
+        } else {
+          // Load data from API
+          console.log('Loading data from API...');
+          const [itemsRes, tablesRes, waitersRes] = await Promise.all([
+            api.get('/api/items'),
+            api.get('/api/tables'),
+            api.get('/api/waiters')
+          ]);
+
+          console.log('API Responses:', {
+            items: itemsRes.data,
+            tables: tablesRes.data,
+            waiters: waitersRes.data
+          });
+
+          // Ensure items is an array
+          setItems(Array.isArray(itemsRes.data) ? itemsRes.data : []);
+          setWaiters(Array.isArray(waitersRes.data) ? waitersRes.data : []);
+
+          // Cache data for offline use
+          if (Array.isArray(itemsRes.data)) {
+            await saveMenuItemsOffline(itemsRes.data);
           }
-        });
-        setItems(response.data);
-      } catch (err) {
-        setError('Failed to load menu items');
-        console.error(err);
+          if (Array.isArray(tablesRes.data)) {
+            await saveTablesOffline(tablesRes.data);
+          }
+          if (Array.isArray(waitersRes.data)) {
+            // Save waiters to IndexedDB for offline use
+            await saveUsersData(waitersRes.data);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading data:', error);
+        if (error.response?.status === 403) {
+          // Token expired or invalid
+          localStorage.removeItem('token');
+          navigate('/login');
+        } else {
+          setError(`Failed to load data: ${error.response?.data?.error || error.message}`);
+        }
+        // Set empty arrays as fallback
+        setItems([]);
+        setWaiters([]);
       } finally {
         setLoading(false);
       }
     };
-    
-    // Fetch waiters (for cashier to select waiter)
-    const fetchWaiters = async () => {
-      if (user?.role === 'cashier') {
-        try {
-          console.log('Fetching waiters list...');
-          const response = await axios.get('http://localhost:5001/api/waiters', {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          });
-          
-          console.log('Fetched waiters:', response.data);
-          setWaiters(response.data);
-          
-          // Set default waiter if available
-          if (response.data.length > 0) {
-            setWaiterId(response.data[0].id);
-          }
-        } catch (err) {
-          console.error('Failed to load waiters', err);
-          setError('Failed to load waiters. Please refresh and try again.');
-        }
-      }
-    };
-    
-    fetchItems();
-    fetchWaiters();
-    
-    // Socket.IO for real-time menu updates
-    const socket = io('http://localhost:5001');
-    
-    socket.on('connect', () => {
-      console.log('Cashier connected to socket server');
-    });
-    
-    socket.on('item_created', (newItem) => {
-      console.log('New menu item received:', newItem);
-      setItems(prevItems => [...prevItems, newItem]);
-    });
-    
-    socket.on('item_updated', (updatedItem) => {
-      console.log('Menu item updated:', updatedItem);
-      setItems(prevItems => 
-        prevItems.map(item => item.id === updatedItem.id ? updatedItem : item)
-      );
-    });
-    
-    socket.on('item_deleted', (deletedItem) => {
-      console.log('Menu item deleted:', deletedItem);
-      setItems(prevItems => prevItems.filter(item => item.id !== deletedItem.id));
-    });
-    
-    return () => {
-      socket.disconnect();
-    };
-  }, [token, user]);
-  
-  // Setup online/offline listeners
-  useEffect(() => {
-    const handleOnline = () => {
-      setIsOffline(false);
-      setSyncStatus('Connected');
-    };
-    
-    const handleOffline = () => {
-      setIsOffline(true);
-      setSyncStatus('Working offline. Orders will sync when reconnected.');
-    };
-    
-    const cleanup = offlineService.initOfflineListeners(handleOnline, handleOffline);
-    
-    return cleanup;
-  }, []);
+
+    loadData();
+  }, [offlineMode, navigate]);
   
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -189,54 +228,62 @@ export default function OrderEntry() {
     return cart.reduce((total, item) => total + (item.price * item.quantity), 0).toFixed(2);
   };
   
-  // Update the handlePlaceOrder function
   const handlePlaceOrder = async () => {
     if (cart.length === 0) {
-      setError('Cart is empty. Please add items to your order.');
+      setError('Cart is empty');
       return;
     }
-    
+
     if (!waiterId) {
       setError('Please select a waiter');
       return;
     }
 
+    const orderData = {
+      id: Date.now().toString(),
+      items: cart.map(item => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+        type: item.item_type
+      })),
+      total: calculateTotal(),
+      waiter_id: waiterId,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      isOffline: !navigator.onLine
+    };
+
     try {
-      const orderData = {
-        items: cart.map(item => ({
-          item_id: item.id,
-          quantity: item.quantity,
-          price: item.price,
-          item_type: item.item_type
-        })),
-        total_amount: parseFloat(calculateTotal()),
-        waiter_id: waiterId,
-        status: 'pending' // Set initial status
-      };
-      
-      console.log('Placing order with data:', orderData);
-      
-      let orderId;
-      
-      if (navigator.onLine) {
-        // Online mode - send to server
-        const response = await axios.post('http://localhost:5001/api/orders', orderData, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
+      if (offlineMode) {
+        // Save order to IndexedDB
+        const orderId = await saveOrderOffline({
+          ...orderData,
+          status: 'pending',
+          created_at: new Date().toISOString()
         });
-      
-        console.log('Order created:', response.data);
-        orderId = response.data.id;
+
+        // Save receipt to IndexedDB
+        await saveReceiptOffline({
+          order_id: orderId,
+          items: orderData.items,
+          total: orderData.total,
+          created_at: new Date().toISOString()
+        });
+
+        // Show success message
+        setSuccess('Order saved offline. It will be synced when you are back online.');
       } else {
-        // Offline mode - save locally
-        const offlineOrder = offlineService.saveOrderOffline(orderData);
-        orderId = offlineOrder.id;
+        // Send order to server
+        const response = await api.post('/api/orders', orderData);
+        
+        // Emit order event
+        socket.emit('newOrder', response.data);
+        
+        // Show success message
+        setSuccess('Order placed successfully!');
       }
-      
-      setSuccess(isOffline ? 
-        'Order saved in offline mode. It will sync when back online.' : 
-        'Order placed successfully!');
       
       // Clear the cart and reset fields
       setCart([]);
@@ -247,219 +294,260 @@ export default function OrderEntry() {
       }, 1500);
     } catch (error) {
       console.error('Error placing order:', error);
-      setError('Failed to place order: ' + (error.response?.data?.error || error.message));
+      if (error.response?.status === 403) {
+        // Token expired or invalid
+        localStorage.removeItem('token');
+        navigate('/login');
+      } else {
+        setError('Failed to place order: ' + (error.response?.data?.error || error.message));
+      }
     }
   };
   
-  // Update handlePrintOrder function
-  const handlePrintOrder = async () => {
+  const handlePrintReceipt = async () => {
     if (cart.length === 0) {
-      setError('Cart is empty. Please add items to your order.');
+      setError('Cart is empty');
       return;
     }
-    
+
     if (!waiterId) {
       setError('Please select a waiter');
       return;
     }
 
     try {
-      // First place the order
-      const orderData = {
-        items: cart.map(item => ({
-          item_id: item.id,
-          quantity: item.quantity,
-          price: item.price,
-          item_type: item.item_type
-        })),
-        total_amount: parseFloat(calculateTotal()),
-        waiter_id: waiterId,
-        status: 'pending' // Set initial status
-      };
-      
-      console.log('Placing order with data for kitchen/bar printing:', orderData);
-      
-      let orderId;
-      let placedOrder;
-      
-      // Use the same API endpoint as handlePlaceOrder
-      if (navigator.onLine) {
-        // Online mode - send to server
-        const response = await axios.post('http://localhost:5001/api/orders', orderData, {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        });
-      
-        console.log('Order created for kitchen/bar printing:', response.data);
-        orderId = response.data.id;
-        placedOrder = response.data;
-      } else {
-        // Offline mode - save locally
-        const offlineOrder = offlineService.saveOrderOffline(orderData);
-        orderId = offlineOrder.id;
-        placedOrder = offlineOrder;
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
       }
-      
-      // Print kitchen and bar tickets
-      printKitchenAndBarTickets(placedOrder);
-      
-      setSuccess('Order placed and sent to kitchen/bar');
-      
-      // Clear the cart after successful order
-      setCart([]);
-      
-      // Navigate back to dashboard to show the updated order list
-      setTimeout(() => {
-        navigate('/cashier/dashboard');
-      }, 1500);
-    } catch (error) {
-      console.error('Error placing order for kitchen/bar:', error);
-      setError('Failed to create order for kitchen/bar: ' + (error.response?.data?.error || error.message));
-    }
-  };
-  
-  // Function to print kitchen and bar tickets separately
-  const printKitchenAndBarTickets = (order) => {
-    // Separate items by type
-    const foodItems = order.items.filter(item => item.item_type === 'food');
-    const drinkItems = order.items.filter(item => item.item_type === 'drink');
-    
-    // Only print kitchen ticket if there are food items
-    if (foodItems.length > 0) {
-      printTicket(order, foodItems, 'KITCHEN');
-    }
-    
-    // Only print bar ticket if there are drink items
-    if (drinkItems.length > 0) {
-      printTicket(order, drinkItems, 'BAR');
-    }
-    
-    // After printing kitchen/bar tickets, redirect to receipt page
-    setTimeout(() => {
-      navigate(`/cashier/receipt/${order.id}`);
-    }, 500);
-  };
-  
-  // Function to print a specific ticket
-  const printTicket = (order, items, ticketType) => {
-    const printWindow = window.open('', '_blank', 'width=300,height=600');
-    if (!printWindow) {
-      alert(`Please allow pop-ups to print ${ticketType.toLowerCase()} ticket`);
-      return;
-    }
-    
-    // Add the content to the new window
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>${ticketType} Ticket #${order.id}</title>
-          <style>
-            @page {
-              size: 58mm 120mm;
-              margin: 0;
-            }
-            body {
-              font-family: 'Courier New', monospace;
-              margin: 0;
-              padding: 4mm 2mm;
-              width: 58mm;
-            }
-            .ticket {
-              text-align: center;
-              padding: 2mm;
-            }
-            .header {
-              font-size: 14pt;
-              font-weight: bold;
-              margin-bottom: 3mm;
-              text-align: center;
-            }
-            .order-info {
-              font-size: 10pt;
-              margin-bottom: 3mm;
-              text-align: center;
-            }
-            .divider {
-              border-top: 1px dashed #999;
-              margin: 3mm 0;
-            }
-            .item {
-              text-align: left;
-              font-size: 12pt;
-              margin-bottom: 2mm;
-              display: flex;
-              justify-content: space-between;
-            }
-            .footer {
-              font-size: 9pt;
-              margin-top: 4mm;
-              text-align: center;
-            }
-          </style>
-        </head>
-        <body>
+
+      // Separate items by type
+      const foodItems = cart.filter(item => item.item_type === 'food');
+      const drinkItems = cart.filter(item => item.item_type === 'drink');
+
+      // Create a printable version of the tickets
+      const printWindow = window.open('', '_blank', 'width=300,height=600');
+      if (!printWindow) {
+        alert('Please allow pop-ups to print tickets');
+        return;
+      }
+
+      // Add the content to the new window
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Order Tickets</title>
+            <style>
+              @page {
+                size: 58mm auto;
+                margin: 0;
+              }
+              html, body {
+                width: 58mm;
+                margin: 0;
+                padding: 0;
+                overflow-x: hidden;
+                background-color: white;
+              }
+              body {
+                font-family: 'Courier New', monospace;
+                margin: 0;
+                padding: 0;
+                width: 58mm;
+              }
+              .ticket {
+                padding: 2px;
+                page-break-after: always;
+                width: 100%;
+                max-width: 58mm;
+                overflow-x: hidden;
+                box-sizing: border-box;
+                margin-bottom: 5mm;
+              }
+              .header {
+                text-align: center;
+                margin-bottom: 2px;
+              }
+              .header h1 {
+                font-size: 14px;
+                margin: 1px 0;
+                font-weight: bold;
+              }
+              .header div {
+                font-size: 9px;
+              }
+              .detail {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 1px;
+                font-size: 9px;
+              }
+              .divider {
+                border-top: 1px dashed #999;
+                margin: 3px 0;
+              }
+              .item {
+                margin-bottom: 2px;
+                font-size: 10px;
+                font-weight: normal;
+                max-width: 58mm;
+                overflow: hidden;
+              }
+              .quantity {
+                font-weight: bold;
+                font-size: 12px;
+              }
+              .footer {
+                text-align: center;
+                font-size: 8px;
+                margin-top: 4px;
+                font-weight: bold;
+              }
+              * {
+                line-height: 1.1;
+                max-width: 58mm;
+                box-sizing: border-box;
+              }
+              h2 {
+                font-size: 12px;
+                margin: 3px 0;
+                text-decoration: underline;
+                font-weight: bold;
+              }
+            </style>
+          </head>
+          <body onload="window.print();">
+      `);
+
+      // Add food ticket if it exists
+      if (foodItems.length > 0) {
+        printWindow.document.write(`
           <div class="ticket">
             <div class="header">
-              ${ticketType} TICKET
+              <h1>KITCHEN ORDER</h1>
+              <div>*** DRAFT - NOT A RECEIPT ***</div>
             </div>
-            
             <div class="divider"></div>
-            
-            <div class="order-info">
-              Order #: ${order.id}<br>
-              Table: ${order.table_number || 'N/A'}<br>
-              Waiter: ${order.waiter_name || 'N/A'}<br>
-              Date: ${new Date().toLocaleDateString()}<br>
-              Time: ${new Date().toLocaleTimeString()}
+            <div class="detail">
+              <div>Order: #${Date.now()}</div>
+              <div>Time: ${new Date().toLocaleTimeString()}</div>
             </div>
-            
-            <div class="divider"></div>
-            
-            <div style="text-align: left;">
-              <div style="font-weight: bold; margin-bottom: 2mm;">ITEMS:</div>
-              
-              ${items.map(item => `
-                <div class="item">
-                  <div style="font-weight: bold;">${item.quantity}x</div>
-                  <div style="flex-grow: 1; padding-left: 3mm;">${item.name}</div>
-                </div>
-              `).join('')}
+            <div class="detail">
+              <div>Waiter: ${waiters.find(w => w.id === waiterId)?.username || 'Unknown'}</div>
             </div>
-            
             <div class="divider"></div>
-            
+            <h2>FOOD ITEMS</h2>
+            ${foodItems.map(item => `
+              <div class="item">
+                <span class="quantity">${item.quantity}x</span> ${item.name}
+                ${item.description ? `<div style="font-size: 8px; margin-left: 12px; margin-top: 1px;">${item.description}</div>` : ''}
+              </div>
+            `).join('')}
+            <div class="divider"></div>
             <div class="footer">
-              Printed: ${new Date().toLocaleString()}<br>
-              PRIORITY: NORMAL
+              <div>KITCHEN COPY</div>
+              <div>${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</div>
             </div>
           </div>
-          <script>
-            // Print and close window automatically
-            window.onload = function() {
-              window.print();
-              setTimeout(function() {
-                window.close();
-              }, 500);
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    
-    printWindow.document.close();
+        `);
+      }
+
+      // Add drink ticket if it exists
+      if (drinkItems.length > 0) {
+        printWindow.document.write(`
+          <div class="ticket">
+            <div class="header">
+              <h1>BAR ORDER</h1>
+              <div>*** DRAFT - NOT A RECEIPT ***</div>
+            </div>
+            <div class="divider"></div>
+            <div class="detail">
+              <div>Order: #${Date.now()}</div>
+              <div>Time: ${new Date().toLocaleTimeString()}</div>
+            </div>
+            <div class="detail">
+              <div>Waiter: ${waiters.find(w => w.id === waiterId)?.username || 'Unknown'}</div>
+            </div>
+            <div class="divider"></div>
+            <h2>DRINK ITEMS</h2>
+            ${drinkItems.map(item => `
+              <div class="item">
+                <span class="quantity">${item.quantity}x</span> ${item.name}
+                ${item.description ? `<div style="font-size: 8px; margin-left: 12px; margin-top: 1px;">${item.description}</div>` : ''}
+              </div>
+            `).join('')}
+            <div class="divider"></div>
+            <div class="footer">
+              <div>BAR COPY</div>
+              <div>${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}</div>
+            </div>
+          </div>
+        `);
+      }
+
+      printWindow.document.write('</body></html>');
+      printWindow.document.close();
+
+      // Save order data for offline/online sync
+    const orderData = {
+      items: cart.map(item => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+          item_type: item.item_type
+      })),
+      total: calculateTotal(),
+      waiter_id: waiterId,
+      status: 'pending',
+        created_at: new Date().toISOString()
+    };
+
+      if (offlineMode) {
+        // Save order to IndexedDB
+        const orderId = await saveOrderOffline(orderData);
+        setSuccess('Order saved offline. It will be synced when you are back online.');
+      } else {
+        // Send order to server
+        const response = await api.post('/api/orders', orderData);
+        socket.emit('newOrder', response.data);
+        setSuccess('Order placed successfully!');
+      }
+      
+      // Clear cart and reset fields
+      setCart([]);
+      setWaiterId('');
+      
+    } catch (error) {
+      console.error('Error printing receipt:', error);
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        // Token expired or invalid
+        localStorage.removeItem('token');
+        navigate('/login');
+      } else {
+        setError('Failed to print receipt: ' + (error.response?.data?.error || error.message));
+      }
+    }
   };
   
   // Filter items based on active tab
   const filteredItems = activeTab === 'all' 
-    ? items 
-    : items.filter(item => item.item_type === activeTab);
+    ? (Array.isArray(items) ? items : [])
+    : (Array.isArray(items) ? items.filter(item => item.item_type === activeTab) : []);
+  
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
+        <CircularProgress />
+      </Box>
+    );
+  }
   
   return (
-    <Box>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       <Typography variant="h4" gutterBottom>
         New Order
-        {isOffline && (
+        {offlineMode && (
           <Chip
             label="Offline Mode"
             color="warning"
@@ -469,10 +557,10 @@ export default function OrderEntry() {
         )}
       </Typography>
       
-      {syncStatus && (
-        <Typography variant="body2" color={isOffline ? "warning.main" : "success.main"} sx={{ mb: 2 }}>
-          {syncStatus}
-        </Typography>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
       )}
       
       <Grid container spacing={3}>
@@ -495,9 +583,7 @@ export default function OrderEntry() {
               <Box sx={{ p: 4, textAlign: 'center' }}>
                 <Typography>Loading items...</Typography>
               </Box>
-            ) : error ? (
-              <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>
-            ) : filteredItems.length === 0 ? (
+            ) : !Array.isArray(filteredItems) || filteredItems.length === 0 ? (
               <Box sx={{ p: 4, textAlign: 'center' }}>
                 <Typography>No items found in this category</Typography>
               </Box>
@@ -577,19 +663,19 @@ export default function OrderEntry() {
             <Box sx={{ mb: 3 }}>
               <FormControl fullWidth sx={{ mb: 2 }}>
                 <InputLabel>Select Waiter</InputLabel>
-                      <Select
-                        value={waiterId}
+                <Select
+                  value={waiterId}
                   onChange={(e) => setWaiterId(e.target.value)}
-                        label="Select Waiter"
-                        required
-                      >
-                  {waiters.map((waiter) => (
-                          <MenuItem key={waiter.id} value={waiter.id}>
-                            {waiter.username}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
+                  label="Select Waiter"
+                  required
+                >
+                  {Array.isArray(waiters) && waiters.map((waiter) => (
+                    <MenuItem key={waiter.id} value={waiter.id}>
+                      {waiter.username}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Box>
             
             <Divider sx={{ mb: 2 }} />
@@ -669,11 +755,11 @@ export default function OrderEntry() {
                     color="secondary"
                     size="large"
                     fullWidth
-                    startIcon={<PrintIcon />}
-                    onClick={handlePrintOrder}
+                    startIcon={<ReceiptIcon />}
+                    onClick={handlePrintReceipt}
                     disabled={cart.length === 0}
                   >
-                    Place & Print For Kitchen/Bar
+                    Print Receipt
                   </Button>
                 </Box>
               </>
@@ -711,6 +797,6 @@ export default function OrderEntry() {
           {error}
         </Alert>
       </Snackbar>
-    </Box>
+    </Container>
   );
 } 

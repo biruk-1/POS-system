@@ -1,21 +1,39 @@
 {
   "short_name": "POS System",
-  "name": "Restaurant POS System",
-  "description": "A hybrid point-of-sale system with online/offline capabilities",
+  "name": "POS System - Point of Sale with Offline Support",
+  "description": "A Point of Sale system with full offline support",
   "icons": [
     {
       "src": "favicon.ico",
       "sizes": "64x64 32x32 24x24 16x16",
       "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
     }
   ],
-  "start_url": "/",
+  "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
   "background_color": "#ffffff",
-  "orientation": "portrait",
+  "orientation": "any",
   "scope": "/",
-  "categories": ["business", "restaurant", "food", "point-of-sale"],
+  "categories": ["business", "restaurant", "food", "point-of-sale", "productivity"],
+  "screenshots": [
+    {
+      "src": "screenshot1.png",
+      "sizes": "1280x720",
+      "type": "image/png"
+    }
+  ],
+  "prefer_related_applications": false,
   "shortcuts": [
     {
       "name": "New Order",

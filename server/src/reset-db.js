@@ -237,3 +237,4 @@ function createDefaultSettings() {
 }
 
 console.log('Database reset script completed. Run the server to use the new database.'); 
+
