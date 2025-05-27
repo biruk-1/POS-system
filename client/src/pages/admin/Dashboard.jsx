@@ -31,7 +31,8 @@ import {
   Divider,
   Alert,
   Snackbar,
-  useTheme
+  useTheme,
+  TableFooter
 } from '@mui/material';
 import {
   Edit as EditIcon,
@@ -45,7 +46,8 @@ import {
   Cancel as CancelIcon,
   GetApp as DownloadIcon,
   Refresh as RefreshIcon,
-  CheckCircle as CheckCircleIcon
+  CheckCircle as CheckCircleIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -112,36 +114,63 @@ const fetchWaitersData = async (token) => {
 const fetchOrderWithItems = async (orderId, token) => {
   try {
     console.log('Fetching order details for order:', orderId);
-    const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
+    // First get the order details
+  const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  let order = response.data;
+    console.log('Initial order data:', order);
+
+    // Then get the order items
+    try {
+      console.log('Fetching items for order:', orderId);
+    const itemsRes = await axios.get(`http://localhost:5001/api/orders/${orderId}/items`, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     });
-    let order = response.data;
-    console.log('Initial order data:', order);
-
-    // Always fetch items separately to ensure we have the complete data
-    try {
-      console.log('Fetching items for order:', orderId);
-      const itemsRes = await axios.get(`http://localhost:5001/api/orders/${orderId}/items`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
       console.log('Items response:', itemsRes.data);
       
-      // Ensure items is always an array
-      const items = Array.isArray(itemsRes.data) ? itemsRes.data : [];
-      order = { ...order, items };
+      // Process the items and ensure all necessary fields
+      const items = Array.isArray(itemsRes.data) ? itemsRes.data.map(item => ({
+        id: item.id,
+        item_id: item.item_id,
+        order_id: item.order_id,
+        name: item.name || 'Unknown Item',
+        description: item.description || '',
+        category: item.category || 'uncategorized',
+        quantity: parseInt(item.quantity) || 0,
+        price: parseFloat(item.price) || 0,
+        total_price: parseFloat(item.total_price) || parseFloat(item.price * item.quantity) || 0,
+        status: item.status || 'pending',
+        item_type: item.item_type || 'food',
+        image: item.image
+      })) : [];
+
+      // Calculate total amount from items
+      const total_amount = items.reduce((sum, item) => {
+        const itemTotal = item.price * item.quantity;
+        return sum + (isNaN(itemTotal) ? 0 : itemTotal);
+      }, 0);
+
+      // Update the order with items and recalculated total
+      order = {
+        ...order,
+        items,
+        total_amount,
+        item_count: items.length
+      };
       
       console.log('Final order data with items:', order);
-      return order;
+  return order;
     } catch (itemsError) {
       console.error('Error fetching order items:', itemsError);
-      // Return order with empty items array if items fetch fails
-      return { ...order, items: [] };
+      // If items fetch fails, return order with empty items array
+      return { ...order, items: [], total_amount: 0, item_count: 0 };
     }
   } catch (error) {
     console.error('Error fetching order:', error);
@@ -192,50 +221,100 @@ export default function AdminDashboard() {
   const [customDate, setCustomDate] = useState(null);
   const [showCustomDatePicker, setShowCustomDatePicker] = useState(false);
 
+  const [isConnected, setIsConnected] = useState(true);
+
   // Add fetchOrders function
   const fetchOrders = async () => {
     setLoading(true);
     const data = await fetchOrdersData(token);
-    setOrders(data);
-    setFilteredOrders(data);
+    // Filter out orders with no items
+    const nonEmptyOrders = data.filter(order => order.items && order.items.length > 0);
+    setOrders(nonEmptyOrders);
+    setFilteredOrders(nonEmptyOrders);
     setLoading(false);
   };
 
   // Update socket connection setup
   useEffect(() => {
-    // Connect to socket server with proper configuration
-    const newSocket = io('http://localhost:5001', {
-      withCredentials: true,
-      transports: ['websocket'],
-      auth: {
-        token
-      },
-      extraHeaders: {
-        'Access-Control-Allow-Origin': 'http://localhost:5173'
+    const token = localStorage.getItem('token');
+    if (!token) {
+      console.error('No token found for socket connection');
+      return;
+    }
+
+    // Initialize socket connection with auth token
+    const socket = io('http://localhost:5001', {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
+
+    // Connection event handlers
+    socket.on('connect', () => {
+      console.log('Admin connected to socket server');
+      setIsConnected(true);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error.message);
+      setIsConnected(false);
+    });
+
+    socket.on('connect_timeout', () => {
+      console.error('Socket connection timeout');
+      setIsConnected(false);
+    });
+
+    socket.on('error', (error) => {
+      console.error('Socket error:', error);
+      setIsConnected(false);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Admin disconnected from socket server:', reason);
+      setIsConnected(false);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log('Socket reconnected after', attemptNumber, 'attempts');
+      setIsConnected(true);
+    });
+
+    socket.on('reconnect_error', (error) => {
+      console.error('Socket reconnection error:', error);
+      setIsConnected(false);
+    });
+
+    socket.on('reconnect_failed', () => {
+      console.error('Socket reconnection failed');
+      setIsConnected(false);
+    });
+
+    // Business event handlers
+    socket.on('admin_sales_updated', (data) => {
+      console.log('Sales update received:', data);
+      if (data.timeRanges.includes(timeRange)) {
+        refreshAllSalesData();
       }
     });
 
-    newSocket.on('connect', () => {
-      console.log('Admin connected to socket server');
+    socket.on('order_updated', (updatedOrder) => {
+      console.log('Order update received:', updatedOrder);
+      handleRefreshOrders();
     });
-
-    newSocket.on('disconnect', () => {
-      console.log('Admin disconnected from socket server');
-    });
-
-    newSocket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-    });
-
-    setSocket(newSocket);
 
     // Cleanup on unmount
     return () => {
-      if (newSocket) {
-        newSocket.disconnect();
+      if (socket) {
+        socket.removeAllListeners();
+        socket.close();
       }
     };
-  }, [token]);
+  }, [timeRange]); // Only reconnect if timeRange changes
 
   // Add fetchWaiters function
   const fetchWaiters = async () => {
@@ -246,7 +325,11 @@ export default function AdminDashboard() {
   // Function to refresh all sales data
   const refreshAllSalesData = () => {
     console.log('Refreshing all sales data...');
-    fetchAdminSales();
+    if (!timeRange) {
+      console.error('No timeRange set for sales refresh');
+      return;
+    }
+    fetchAdminSales(timeRange, selectedWaiter);
   };
 
   useEffect(() => {
@@ -306,8 +389,14 @@ export default function AdminDashboard() {
   }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
 
   // Completely rewritten fetch sales function for admin
-  const fetchAdminSales = async (timeRangeParam, waiterId = 'all') => {
+  const fetchAdminSales = async (timeRangeParam = timeRange, waiterId = selectedWaiter) => {
     try {
+      // Ensure we have a valid timeRange
+      if (!timeRangeParam) {
+        console.error('No timeRange provided for sales fetch');
+        return;
+      }
+
       console.log('Fetching admin sales data for:', {
         timeRange: timeRangeParam,
         waiterId,
@@ -317,14 +406,13 @@ export default function AdminDashboard() {
       let url = `http://localhost:5001/api/admin/sales/${timeRangeParam}`;
       const params = new URLSearchParams();
 
-      if (waiterId !== 'all') {
-        params.append('waiter_id', waiterId);
+      if (waiterId && waiterId !== 'all') {
+        params.append('waiterId', waiterId);
       }
 
       // Handle custom date
       if (timeRangeParam === 'custom' && customDate) {
-        const formattedDate = customDate.toISOString().split('T')[0];
-        params.append('date', formattedDate);
+        params.append('customDate', customDate.toISOString().split('T')[0]);
       }
 
       // Add cache buster
@@ -343,9 +431,17 @@ export default function AdminDashboard() {
       const data = await response.json();
       console.log('Sales data received:', data);
 
-      if (data[timeRangeParam]) {
-        setSales(data[timeRangeParam]);
-      }
+      // Update sales data with proper type conversion
+      setSales({
+        totalSales: parseFloat(data.totalSales) || 0,
+        completedOrders: parseInt(data.completedOrders) || 0,
+        waiterStats: Array.isArray(data.waiterStats) ? data.waiterStats.map(stat => ({
+          ...stat,
+          total_sales: parseFloat(stat.total_sales) || 0,
+          order_count: parseInt(stat.order_count) || 0,
+          avgOrder: stat.order_count > 0 ? parseFloat(stat.total_sales) / parseInt(stat.order_count) : 0
+        })) : []
+      });
     } catch (error) {
       console.error('Error fetching admin sales:', error);
       console.error('Error details:', {
@@ -353,59 +449,21 @@ export default function AdminDashboard() {
         response: error.response,
         status: error.status
       });
+      setSnackbar({
+        open: true,
+        message: 'Failed to fetch sales data',
+        severity: 'error'
+      });
     }
   };
 
-  // Update useEffect to use new fetch function
+  // Update useEffect for sales data
   useEffect(() => {
-    if (token) {
-      fetchWaiters();
-      fetchAdminSales();
+    if (token && timeRange) {
+      console.log('Sales data effect triggered:', { timeRange, selectedWaiter });
+      fetchAdminSales(timeRange, selectedWaiter);
     }
   }, [token, selectedWaiter, timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Socket.IO connection for real-time updates
-  useEffect(() => {
-    const socket = io('http://localhost:5001', {
-      withCredentials: true,
-      transports: ['websocket'],
-      auth: {
-        token
-      },
-      extraHeaders: {
-        'Access-Control-Allow-Origin': 'http://localhost:5173'
-      }
-    });
-    
-    socket.on('connect', () => {
-      console.log('Admin dashboard connected to socket server');
-    });
-    
-    socket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to connect to real-time updates server',
-        severity: 'error'
-      });
-    });
-    
-    // Listen for admin-specific sales updates
-    socket.on('admin_sales_updated', (data) => {
-      console.log('Admin sales update received:', data);
-      fetchAdminSales();
-    });
-    
-    // Listen for general sales updates
-    socket.on('sales_data_updated', () => {
-      console.log('Sales data update received, refreshing');
-      fetchAdminSales();
-    });
-    
-    return () => {
-      socket.disconnect();
-    };
-  }, [timeRange, selectedWaiter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleTabChange = (event, newValue) => {
     console.log(`Switching to tab ${newValue} from ${activeTab}`);
@@ -418,8 +476,11 @@ export default function AdminDashboard() {
       console.log('Selected waiter:', selectedWaiter);
       console.log('Time range:', timeRange);
       
-      // Use the refreshAllSalesData function for a consistent approach
+      if (timeRange) {
       refreshAllSalesData();
+      } else {
+        console.error('Cannot refresh sales data: timeRange is not set');
+      }
     }
   };
 
@@ -429,6 +490,7 @@ export default function AdminDashboard() {
 
   const handleTimeRangeChange = (event) => {
     const newTimeRange = event.target.value;
+    console.log('Time range changing to:', newTimeRange);
     setTimeRange(newTimeRange);
     
     if (newTimeRange === 'custom') {
@@ -551,22 +613,27 @@ export default function AdminDashboard() {
         throw new Error(`Order #${orderId} not found`);
       }
       
-      // Ensure items is always an array
+      // Ensure items is always an array and all numeric values are properly parsed
       const orderWithItems = {
         ...detailedOrder,
-        items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
+        items: Array.isArray(detailedOrder.items) ? detailedOrder.items.map(item => ({
+          ...item,
+          quantity: Number(item.quantity) || 0,
+          price: Number(item.price) || 0,
+          total_price: Number(item.total_price) || 0
+        })) : []
       };
       
       console.log('Setting order data for editing:', orderWithItems);
       setCurrentOrder(orderWithItems);
       setEditedOrder(orderWithItems);
-      setEditDialogOpen(true);
+        setEditDialogOpen(true);
       
     } catch (error) {
-      console.error('Error fetching order details:', error);
+      console.error('Error editing order:', error);
       setSnackbar({
         open: true,
-        message: `Failed to load order details: ${error.message || 'Unknown error'}`,
+        message: `Error editing order: ${error.message}`,
         severity: 'error'
       });
     } finally {
@@ -577,15 +644,34 @@ export default function AdminDashboard() {
   const handleUpdateItem = (itemId, field, value) => {
     if (!editedOrder) return;
     
-    // Update the item in the edited order
-    const updatedItems = editedOrder.items.map(item => 
-      item.id === itemId ? {...item, [field]: value} : item
-    );
+    console.log('Updating item:', { itemId, field, value });
     
-    setEditedOrder({
-      ...editedOrder,
-      items: updatedItems
+    const updatedItems = editedOrder.items.map(item => {
+      if (item.id === itemId) {
+        const updatedItem = { ...item, [field]: value };
+        
+        // Ensure numeric values are properly handled
+        if (field === 'quantity') {
+          updatedItem.quantity = Number(value) || 0;
+          updatedItem.total_price = updatedItem.quantity * Number(updatedItem.price);
+        } else if (field === 'price') {
+          updatedItem.price = Number(value) || 0;
+          updatedItem.total_price = Number(updatedItem.quantity) * updatedItem.price;
+        }
+        
+        return updatedItem;
+      }
+      return item;
     });
+    
+    const updatedOrder = {
+      ...editedOrder,
+      items: updatedItems,
+      total_amount: updatedItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.price)), 0)
+    };
+    
+    console.log('Updated order:', updatedOrder);
+    setEditedOrder(updatedOrder);
   };
 
   const handleRemoveItem = (itemId) => {
@@ -762,158 +848,209 @@ export default function AdminDashboard() {
     setPage(newPage);
   };
 
-  const renderOrdersTab = () => (
-    <Box>
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Typography variant="h6">Orders</Typography>
-          <IconButton
-            color="primary"
-            onClick={handleRefreshOrders}
-            disabled={loading}
-            title="Refresh Orders"
-          >
-            <RefreshIcon />
-          </IconButton>
-        </Box>
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-          <TextField
-            placeholder="Search by ID or waiter..."
-            size="small"
-            value={searchTerm}
-            onChange={handleSearchChange}
-            sx={{ width: 200 }}
-            InputProps={{
-              startAdornment: (
-                <Box component="span" sx={{ color: 'action.active', mr: 1 }}>
-                  🔍
-                </Box>
-              ),
-            }}
-          />
-          <FormControl sx={{ minWidth: 150 }}>
-            <InputLabel>Status</InputLabel>
-            <Select
-              value={statusFilter}
-              onChange={handleStatusFilterChange}
-              label="Status"
-              size="small"
-            >
-              <MenuItem value="all">All Statuses</MenuItem>
-              <MenuItem value="pending">Pending</MenuItem>
-              <MenuItem value="in-progress">In Progress</MenuItem>
-              <MenuItem value="completed">Completed</MenuItem>
-              <MenuItem value="paid">Paid</MenuItem>
-              <MenuItem value="cancelled">Cancelled</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl sx={{ minWidth: 200 }}>
-            <InputLabel>Waiter</InputLabel>
-            <Select
-              value={selectedWaiter}
-              onChange={handleWaiterFilter}
-              label="Filter by Waiter"
-              size="small"
-            >
-              <MenuItem value="all">All Waiters</MenuItem>
-              {waiters.map((waiter) => (
-                <MenuItem key={waiter.id} value={waiter.id}>
-                  {waiter.username}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </Box>
-      </Box>
-      
-      <Box sx={{ mb: 3, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>Date Range:</Typography>
-        <TextField
-          label="From"
-          type="date"
-          size="small"
-          InputLabelProps={{ shrink: true }}
-          value={dateRange.startDate || ''}
-          onChange={(e) => handleDateRangeChange('startDate', e)}
-        />
-        <TextField
-          label="To"
-          type="date"
-          size="small"
-          InputLabelProps={{ shrink: true }}
-          value={dateRange.endDate || ''}
-          onChange={(e) => handleDateRangeChange('endDate', e)}
-        />
-        {(dateRange.startDate || dateRange.endDate) && (
-        <Button
-            size="small" 
-          variant="outlined"
-            onClick={() => setDateRange({ startDate: null, endDate: null })}
-        >
-            Clear Dates
-        </Button>
-        )}
-      </Box>
+  // 1. Add summary boxes above the orders table
+  const getOrderStats = (orders) => {
+    const completedOrders = orders.filter(order => order.status === 'completed' || order.status === 'paid');
+    const pendingOrders = orders.filter(order => order.status === 'pending');
+    const totalSales = completedOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
+    const avgSales = completedOrders.length > 0 ? totalSales / completedOrders.length : 0;
+    return {
+      totalSales,
+      avgSales,
+      completedOrders: completedOrders.length,
+      pendingOrders: pendingOrders.length
+    };
+  };
 
-      <Box sx={{ mb: 3, display: 'flex', gap: 3, flexWrap: 'wrap', justifyContent: 'space-between' }}>
-        <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.primary.light, color: 'white' }}>
-            <Typography variant="body2">Filtered Orders</Typography>
-            <Typography variant="h4">{filteredOrders.length}</Typography>
-          </Paper>
-          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.secondary.main, color: 'white' }}>
-            <Typography variant="body2">Total Amount</Typography>
-            <Typography variant="h4">
-              {formatCurrency(
-                filteredOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0)
-              )}
-              </Typography>
-          </Paper>
-          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.success.main, color: 'white' }}>
-            <Typography variant="body2">Paid Orders</Typography>
-            <Typography variant="h4">
-              {filteredOrders.filter(order => order.status === 'paid').length}
-              </Typography>
-          </Paper>
-          <Paper sx={{ p: 2, minWidth: 200, bgcolor: theme.palette.warning.main, color: 'white' }}>
-            <Typography variant="body2">Pending Orders</Typography>
-            <Typography variant="h4">
-              {filteredOrders.filter(order => order.status === 'pending').length}
-              </Typography>
-          </Paper>
-        </Box>
-        <Button
-          variant="contained"
-          color="primary"
-          startIcon={<DownloadIcon />}
-          onClick={handleExportCSV}
-          disabled={filteredOrders.length === 0}
-          sx={{ height: 'fit-content', alignSelf: 'center' }}
-        >
-          Export CSV
-        </Button>
-      </Box>
+  const orderStats = getOrderStats(filteredOrders);
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead sx={{ bgcolor: theme.palette.primary.main }}>
+  const summaryBoxStyles = [
+    { bgcolor: '#1976d2', color: '#fff', icon: <TrendingUpIcon fontSize="large" /> }, // Total Sales
+    { bgcolor: '#43a047', color: '#fff', icon: <CheckCircleIcon fontSize="large" /> }, // Average Sales
+    { bgcolor: '#fbc02d', color: '#fff', icon: <ViewListIcon fontSize="large" /> }, // Completed Orders
+    { bgcolor: '#e53935', color: '#fff', icon: <RemoveCircleIcon fontSize="large" /> }, // Pending Orders
+  ];
+
+  const renderSummaryBoxes = (stats = orderStats, colorful = false) => {
+    if (colorful) {
+      return (
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: summaryBoxStyles[0].bgcolor, color: summaryBoxStyles[0].color }}>
+              {summaryBoxStyles[0].icon}
+              <Typography variant="body2" color="inherit">Total Sales</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'inherit' }}>{formatCurrency(stats.totalSales)}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: summaryBoxStyles[1].bgcolor, color: summaryBoxStyles[1].color }}>
+              {summaryBoxStyles[1].icon}
+              <Typography variant="body2" color="inherit">Average Sales</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'inherit' }}>{formatCurrency(stats.avgSales)}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: summaryBoxStyles[2].bgcolor, color: summaryBoxStyles[2].color }}>
+              {summaryBoxStyles[2].icon}
+              <Typography variant="body2" color="inherit">Completed Orders</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'inherit' }}>{stats.completedOrders}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center', bgcolor: summaryBoxStyles[3].bgcolor, color: summaryBoxStyles[3].color }}>
+              {summaryBoxStyles[3].icon}
+              <Typography variant="body2" color="inherit">Pending Orders</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'inherit' }}>{stats.pendingOrders}</Typography>
+            </Paper>
+          </Grid>
+        </Grid>
+      );
+    } else {
+      // Simple, original style for Sales tab
+      return (
+        <Grid container spacing={2} sx={{ mb: 2 }}>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="body2" color="text.secondary">Total Sales</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold' }}>{formatCurrency(stats.totalSales)}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="body2" color="text.secondary">Average Sales</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold' }}>{formatCurrency(stats.avgSales)}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="body2" color="text.secondary">Completed Orders</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold' }}>{stats.completedOrders}</Typography>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} sm={6} md={3}>
+            <Paper sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="body2" color="text.secondary">Pending Orders</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 'bold' }}>{stats.pendingOrders}</Typography>
+            </Paper>
+          </Grid>
+        </Grid>
+      );
+    }
+  };
+
+  // 2. Fix Sales tab default behavior and ranking
+  useEffect(() => {
+    if (activeTab === 1) {
+      // When switching to Sales tab, always fetch sales for current filter
+      fetchAdminSales(timeRange, selectedWaiter);
+    }
+  }, [activeTab]);
+
+  // 3. Add ranking logic to Sales tab (top waiters by sales)
+  const renderSalesRanking = () => {
+    // Use sortedWaiters from renderSalesTab
+    const waiterStats = Array.isArray(sales?.waiterStats) ? sales.waiterStats : [];
+    const sortedWaiters = waiterStats.sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
+    return (
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle1" sx={{ mb: 1 }}>Top Waiters by Sales</Typography>
+        <Table size="small">
+          <TableHead>
             <TableRow>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}></TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Order ID</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Waiter</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Date</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Items</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Total Amount</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Status</TableCell>
-              <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>Actions</TableCell>
+              <TableCell>Rank</TableCell>
+              <TableCell>Waiter</TableCell>
+              <TableCell align="right">Orders</TableCell>
+              <TableCell align="right">Total Sales</TableCell>
+              <TableCell align="right">Average Order</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {Array.isArray(filteredOrders) && filteredOrders.length > 0 ? (
-              filteredOrders
+            {sortedWaiters.map((waiter, idx) => (
+              <TableRow key={waiter.waiter_id}>
+                <TableCell>{idx + 1}</TableCell>
+                <TableCell>{waiter.waiter_name}</TableCell>
+                <TableCell align="right">{waiter.order_count}</TableCell>
+                <TableCell align="right">{formatCurrency(waiter.total_sales)}</TableCell>
+                <TableCell align="right">{formatCurrency(waiter.avgOrder)}</TableCell>
+              </TableRow>
+            ))}
+            {sortedWaiters.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} align="center">No ranking data available</TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </Paper>
+    );
+  };
+
+  const renderOrdersTab = () => (
+    <Box>
+      {renderSummaryBoxes(orderStats, true)}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Grid container spacing={2} alignItems="center" sx={{ mb: 2 }}>
+          <Grid item xs={12} sm={3}>
+          <TextField
+              fullWidth
+              label="Search Orders"
+            value={searchTerm}
+            onChange={handleSearchChange}
+              size="small"
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <FormControl fullWidth size="small">
+            <InputLabel>Status</InputLabel>
+              <Select value={statusFilter} onChange={handleStatusFilterChange}>
+                <MenuItem value="all">All</MenuItem>
+              <MenuItem value="pending">Pending</MenuItem>
+              <MenuItem value="completed">Completed</MenuItem>
+              <MenuItem value="paid">Paid</MenuItem>
+            </Select>
+          </FormControl>
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <FormControl fullWidth size="small">
+            <InputLabel>Waiter</InputLabel>
+              <Select value={selectedWaiter} onChange={handleWaiterFilter}>
+              <MenuItem value="all">All Waiters</MenuItem>
+                {waiters.map(waiter => (
+                  <MenuItem key={waiter.id} value={waiter.id}>{waiter.username}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          </Grid>
+          <Grid item xs={12} sm={3}>
+        <Button
+              fullWidth
+          variant="contained"
+              startIcon={<RefreshIcon />}
+              onClick={handleRefreshOrders}
+        >
+              Refresh
+        </Button>
+          </Grid>
+        </Grid>
+
+        <TableContainer>
+        <Table>
+            <TableHead>
+            <TableRow>
+                <TableCell>Order ID</TableCell>
+                <TableCell>Waiter</TableCell>
+                <TableCell>Time</TableCell>
+                <TableCell>Items</TableCell>
+                <TableCell>Total</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+              {(loading ? Array(5).fill({}) : filteredOrders)
                 .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                .map((order) => (
-                  <React.Fragment key={order.id}>
+                .map((order, index) => (
+                  <React.Fragment key={order.id || index}>
                     <TableRow hover>
                       <TableCell>
                         <IconButton
@@ -927,16 +1064,26 @@ export default function AdminDashboard() {
                         >
                           <AddIcon fontSize="small" />
                         </IconButton>
+                        {order.id}
                       </TableCell>
-                      <TableCell>{order.id}</TableCell>
                       <TableCell>{order.waiter_name || 'N/A'}</TableCell>
-                      <TableCell>{new Date(order.created_at).toLocaleString()}</TableCell>
+                      <TableCell>{order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}</TableCell>
                       <TableCell>
                         <Typography variant="body2" color="text.secondary">
-                          {order.items?.length || 0} items
+                          {loading ? (
+                            <CircularProgress size={16} />
+                          ) : (
+                            `${order.items?.reduce((total, item) => total + (item.quantity || 0), 0) || 0} items`
+                          )}
                         </Typography>
                       </TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>{formatCurrency(order.total_amount || 0)}</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }}>
+                        {loading ? (
+                          <CircularProgress size={16} />
+                        ) : (
+                          formatCurrency(order.total_amount || 0)
+                        )}
+                      </TableCell>
                       <TableCell>
                         <Chip 
                           label={order.status || 'pending'} 
@@ -949,58 +1096,10 @@ export default function AdminDashboard() {
                         />
                       </TableCell>
                       <TableCell>
-                        <IconButton 
-                          color="primary" 
-                          onClick={() => handleEditOrder(order.id)}
-                          title="Edit Order"
-                        >
+                        <IconButton size="small" onClick={() => handleEditOrder(order.id)}>
                           <EditIcon fontSize="small" />
                         </IconButton>
-                        <IconButton 
-                          color="success" 
-                          onClick={async () => {
-                            const newStatus = order.status === 'pending' ? 'in-progress' :
-                                            order.status === 'in-progress' ? 'completed' :
-                                            order.status === 'completed' ? 'paid' : 'pending';
-                            
-                            const btnEl = document.activeElement;
-                            if (btnEl) btnEl.disabled = true;
-                            
-                            try {
-                              const detailedOrder = await fetchOrderWithItems(order.id, token);
-                              console.log('Fetched detailed order data for quick update:', detailedOrder);
-                              
-                              const updatedOrder = {
-                                ...detailedOrder, 
-                                status: newStatus,
-                                items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
-                              };
-                              
-                              setCurrentOrder(detailedOrder);
-                              setEditedOrder(updatedOrder);
-                              
-                              await handleSaveOrder();
-                            } catch (error) {
-                              console.error('Error updating order status:', error);
-                              setSnackbar({
-                                open: true,
-                                message: `Failed to update order status: ${error.message || 'Unknown error'}`,
-                                severity: 'error'
-                              });
-                            } finally {
-                              if (btnEl) btnEl.disabled = false;
-                            }
-                          }}
-                          title="Update Status"
-                          disabled={loading && false}
-                        >
-                          <CheckCircleIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton 
-                          color="error" 
-                          onClick={() => handleDeleteOrder(order.id)}
-                          title="Delete Order"
-                        >
+                        <IconButton size="small" onClick={() => handleDeleteOrder(order.id)}>
                           <DeleteIcon fontSize="small" />
                         </IconButton>
                       </TableCell>
@@ -1021,337 +1120,107 @@ export default function AdminDashboard() {
                               </TableRow>
                             </TableHead>
                             <TableBody>
-                              {order.items && order.items.map((item, index) => (
-                                <TableRow key={index}>
-                                  <TableCell>{item.name}</TableCell>
-                                  <TableCell>
-                                    <Chip
-                                      label={item.item_type || 'food'}
-                                      size="small"
-                                      color={item.item_type === 'food' ? 'secondary' : 'primary'}
-                                    />
+                              {loading ? (
+                                <TableRow>
+                                  <TableCell colSpan={5} align="center">
+                                    <CircularProgress size={20} />
                                   </TableCell>
+                                </TableRow>
+                              ) : (
+                                order.items?.map((item, itemIndex) => (
+                                  <TableRow key={item.id || itemIndex}>
+                                    <TableCell>{item.name || `Item ${item.item_id}`}</TableCell>
+                                    <TableCell>{item.item_type}</TableCell>
                                   <TableCell align="center">{item.quantity}</TableCell>
                                   <TableCell align="right">{formatCurrency(item.price)}</TableCell>
                                   <TableCell align="right">{formatCurrency(item.price * item.quantity)}</TableCell>
                                 </TableRow>
-                              ))}
-                              <TableRow>
-                                <TableCell colSpan={4} align="right" sx={{ fontWeight: 'bold' }}>Total:</TableCell>
-                                <TableCell align="right" sx={{ fontWeight: 'bold' }}>
-                                  {formatCurrency(order.items?.reduce((sum, item) => sum + (item.price * item.quantity), 0) || 0)}
-                                </TableCell>
-                              </TableRow>
+                                ))
+                              )}
                             </TableBody>
                           </Table>
                         </Box>
                       </TableCell>
                     </TableRow>
                   </React.Fragment>
-                ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={8} align="center">
-                  <Typography>No orders found</Typography>
-                </TableCell>
-              </TableRow>
-            )}
+                ))}
           </TableBody>
         </Table>
-        {/* Add pagination controls */}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: 2 }}>
-          <Typography variant="body2" color="text.secondary">
-            Showing {page * rowsPerPage + 1} to {Math.min((page + 1) * rowsPerPage, filteredOrders.length)} of {filteredOrders.length} orders
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setPage(0)}
-              disabled={page === 0}
-            >
-              First
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setPage(page - 1)}
-              disabled={page === 0}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setPage(page + 1)}
-              disabled={page >= Math.ceil(filteredOrders.length / rowsPerPage) - 1}
-            >
-              Next
-            </Button>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => setPage(Math.ceil(filteredOrders.length / rowsPerPage) - 1)}
-              disabled={page >= Math.ceil(filteredOrders.length / rowsPerPage) - 1}
-            >
-              Last
-            </Button>
-          </Box>
-        </Box>
       </TableContainer>
+      </Paper>
     </Box>
   );
 
+  // In renderSalesTab, compute stats for the current sales data
+  const getSalesStats = () => {
+    const completedOrders = sales.completedOrders || 0;
+    const totalSales = sales.totalSales || 0;
+    const avgSales = completedOrders > 0 ? totalSales / completedOrders : 0;
+    // Pending orders not available in sales API, so show 0
+    return {
+      totalSales,
+      avgSales,
+      completedOrders,
+      pendingOrders: 0
+    };
+  };
+
   const renderSalesTab = () => {
-    // Initialize waiterSalesMap with empty array if waiters is undefined
-    const waiterSalesMap = {};
-    
-    // First, initialize all waiters with zero sales
-    if (Array.isArray(waiters)) {
-      waiters.forEach(waiter => {
-        waiterSalesMap[waiter.id] = {
-          waiter_id: waiter.id,
-          waiter_name: waiter.username,
-          order_count: 0,
-          total_sales: 0,
-          avgOrder: 0
-        };
-      });
-    }
-    
-    // Then, update with actual sales data if available
-    if (Array.isArray(sales?.waiterStats)) {
-      sales.waiterStats.forEach(stat => {
-        if (waiterSalesMap[stat.waiter_id]) {
-          waiterSalesMap[stat.waiter_id] = {
-            ...stat,
-            avgOrder: stat.order_count > 0 ? stat.total_sales / stat.order_count : 0
-          };
-        }
-      });
-    }
-    
-    // Convert map to array and filter by selected waiter if needed
-    let filteredWaiters = Object.values(waiterSalesMap);
-    if (selectedWaiter !== 'all') {
-      filteredWaiters = filteredWaiters.filter(waiter => waiter.waiter_id === parseInt(selectedWaiter));
-    }
-    
-    // Sort by total sales
-    const sortedWaiters = filteredWaiters.sort((a, b) => (b.total_sales || 0) - (a.total_sales || 0));
-    
-    // Create rank map based on total sales
-    const rankMap = {};
-    let currentRank = 1;
-    let previousSales = null;
-    let rankCount = 0;
-
-    sortedWaiters.forEach((waiter) => {
-      if (previousSales !== waiter.total_sales) {
-        currentRank += rankCount;
-        rankCount = 0;
-      }
-      rankCount++;
-      rankMap[waiter.waiter_id] = currentRank;
-      previousSales = waiter.total_sales;
-    });
-
-    // Calculate filtered totals
-    const filteredTotalSales = sortedWaiters.reduce((sum, waiter) => sum + (waiter.total_sales || 0), 0);
-    const filteredOrderCount = sortedWaiters.reduce((sum, waiter) => sum + (waiter.order_count || 0), 0);
-    
+    // ... existing code ...
+    const salesStats = getSalesStats();
     return (
       <Box>
-        <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Typography variant="h6">Admin Sales Overview</Typography>
-            <IconButton
-              color="primary"
-              onClick={handleRefreshSales}
-              title="Refresh Sales Data"
+        {/* Filter controls at the top */}
+        <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+          <FormControl sx={{ minWidth: 160 }} size="small">
+            <InputLabel>Time Range</InputLabel>
+            <Select
+              value={timeRange}
+              onChange={handleTimeRangeChange}
+              label="Time Range"
               disabled={loading}
             >
-              {loading ? <CircularProgress size={24} /> : <RefreshIcon />}
-            </IconButton>
-          </Box>
-          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-            <FormControl sx={{ minWidth: 200 }}>
-              <InputLabel>Time Range</InputLabel>
-              <Select
-                value={timeRange}
-                onChange={handleTimeRangeChange}
-                label="Time Range"
-                disabled={loading}
-              >
-                <MenuItem value="daily">Today</MenuItem>
-                <MenuItem value="weekly">Last 7 Days</MenuItem>
-                <MenuItem value="monthly">Last 30 Days</MenuItem>
-                <MenuItem value="yearly">Last 365 Days</MenuItem>
-                <MenuItem value="custom">Custom Date</MenuItem>
-              </Select>
-            </FormControl>
-            
-            {showCustomDatePicker && (
-              <LocalizationProvider dateAdapter={AdapterDateFns}>
-                <DatePicker
-                  label="Select Date"
-                  value={customDate}
-                  onChange={handleCustomDateChange}
-                  slotProps={{ textField: { size: 'small' } }}
-                  maxDate={new Date()}
-                  format="yyyy-MM-dd"
-                />
-              </LocalizationProvider>
-            )}
-
-            <FormControl sx={{ minWidth: 200 }}>
-              <InputLabel>Filter by Waiter</InputLabel>
-              <Select
-                value={selectedWaiter}
-                onChange={handleWaiterFilter}
-                label="Filter by Waiter"
-                disabled={loading}
-              >
-                <MenuItem value="all">All Waiters</MenuItem>
-                {waiters.map((waiter) => (
-                  <MenuItem key={waiter.id} value={waiter.id}>
-                    {waiter.username}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Box>
-        </Box>
-
-        {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : (
-          <>
-            <Paper sx={{ p: 3, mb: 3 }}>
-              <Grid container spacing={3}>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">
-                    {selectedWaiter === 'all' ? 'Total Sales' : 'Filtered Sales'}
-                  </Typography>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(filteredTotalSales)}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">
-                    {selectedWaiter === 'all' ? 'Total Orders' : 'Filtered Orders'}
-                  </Typography>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {filteredOrderCount}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">Average Order Value</Typography>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(filteredOrderCount > 0 ? filteredTotalSales / filteredOrderCount : 0)}
-                  </Typography>
-                </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                  <Typography variant="body2" color="text.secondary">Time Period</Typography>
-                  <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-                    {timeRange === 'daily' ? 'Today' : 
-                     timeRange === 'weekly' ? 'Last 7 Days' : 
-                     timeRange === 'monthly' ? 'Last 30 Days' : 'Last 365 Days'}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Last updated: {new Date().toLocaleTimeString()}
-                  </Typography>
-                </Grid>
-              </Grid>
-            </Paper>
-
-            {sortedWaiters.length === 0 ? (
-              <Box sx={{ textAlign: 'center', py: 4, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
-                <Typography variant="h6" color="text.secondary" gutterBottom>
-                  No waiters found
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  This could be because:
-                  <br />1. There are no waiters registered in the system
-                  <br />2. The data hasn't been loaded correctly
-                </Typography>
-                <Button 
-                  variant="contained" 
-                  color="primary" 
-                  sx={{ mt: 2 }}
-                  onClick={handleRefreshSales}
-                  startIcon={<RefreshIcon />}
-                >
-                  Refresh Data
-                </Button>
-              </Box>
-            ) : (
-            <Grid container spacing={3}>
-              {sortedWaiters.map((waiter) => (
-                <Grid item xs={12} sm={6} md={4} key={waiter.waiter_id}>
-                  <Paper 
-                    sx={{
-                      p: 3, 
-                        borderTop: `4px solid ${waiter.total_sales > 0 ? theme.palette.primary.main : theme.palette.grey[400]}`,
-                      boxShadow: 2,
-                      height: '100%',
-                      display: 'flex',
-                        flexDirection: 'column',
-                        opacity: waiter.total_sales > 0 ? 1 : 0.8
-                    }}
-                  >
-                    <Typography variant="h6" gutterBottom color="text.primary">
-                      {waiter.waiter_name}
-                    </Typography>
-                      <Typography variant="h4" color={waiter.total_sales > 0 ? "primary" : "text.secondary"} sx={{ fontWeight: 'bold' }}>
-                      {formatCurrency(waiter.total_sales)}
-                    </Typography>
-                    
-                    <Box sx={{ mt: 2, mb: 1 }}>
-                      <Divider />
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 2 }}>
-                      <Typography variant="body1" color="text.secondary">
-                        Total Orders:
-                      </Typography>
-                      <Typography variant="body1" fontWeight="bold">
-                        {waiter.order_count}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
-                      <Typography variant="body1" color="text.secondary">
-                        Avg. Order:
-                      </Typography>
-                      <Typography variant="body1" fontWeight="bold">
-                        {formatCurrency(waiter.avgOrder)}
-                      </Typography>
-                    </Box>
-                    
-                    <Box sx={{ 
-                      mt: 'auto', 
-                      pt: 2,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}>
-                      <Chip
-                        label={`Rank: ${rankMap[waiter.waiter_id]}`}
-                          color={waiter.total_sales > 0 ? "primary" : "default"}
-                        size="small"
-                        sx={{ fontWeight: 'bold' }}
-                      />
-                    </Box>
-                  </Paper>
-                </Grid>
+              <MenuItem value="daily">Today</MenuItem>
+              <MenuItem value="weekly">Last 7 Days</MenuItem>
+              <MenuItem value="monthly">Last 30 Days</MenuItem>
+              <MenuItem value="yearly">Last 365 Days</MenuItem>
+              <MenuItem value="custom">Custom Date</MenuItem>
+            </Select>
+          </FormControl>
+          {showCustomDatePicker && (
+            <LocalizationProvider dateAdapter={AdapterDateFns}>
+              <DatePicker
+                label="Select Date"
+                value={customDate}
+                onChange={handleCustomDateChange}
+                slotProps={{ textField: { size: 'small' } }}
+                maxDate={new Date()}
+                format="yyyy-MM-dd"
+              />
+            </LocalizationProvider>
+          )}
+          <FormControl sx={{ minWidth: 160 }} size="small">
+            <InputLabel>Waiter</InputLabel>
+            <Select value={selectedWaiter} onChange={handleWaiterFilter} label="Waiter">
+              <MenuItem value="all">All Waiters</MenuItem>
+              {waiters.map(waiter => (
+                <MenuItem key={waiter.id} value={waiter.id}>{waiter.username}</MenuItem>
               ))}
-            </Grid>
-            )}
-          </>
-        )}
+            </Select>
+          </FormControl>
+          <Button
+            variant="contained"
+            startIcon={<RefreshIcon />}
+            onClick={handleRefreshSales}
+            disabled={loading}
+          >
+            Refresh
+          </Button>
+        </Box>
+        {/* Simple summary boxes (not table) */}
+        {renderSummaryBoxes(salesStats, false)}
+        {renderSalesRanking()}
+        {/* ... rest of the sales summary and table ... */}
       </Box>
     );
   };
@@ -1361,18 +1230,31 @@ export default function AdminDashboard() {
     <Dialog 
       open={editDialogOpen} 
       onClose={() => setEditDialogOpen(false)}
-      fullWidth
       maxWidth="md"
+      fullWidth
     >
-      <DialogTitle sx={{ bgcolor: theme.palette.primary.main, color: 'white' }}>
+      <DialogTitle>
         Edit Order #{editedOrder?.id}
+        <IconButton
+          aria-label="close"
+          onClick={() => setEditDialogOpen(false)}
+          sx={{
+            position: 'absolute',
+            right: 8,
+            top: 8,
+            color: (theme) => theme.palette.grey[500],
+          }}
+        >
+          <CloseIcon />
+        </IconButton>
       </DialogTitle>
-      <DialogContent dividers>
-        {editedOrder ? (
-          <Box>
-            {/* Debug log for items */}
-            {console.log('Editing order items:', editedOrder.items)}
-            <Grid container spacing={2} sx={{ mb: 3 }}>
+      <DialogContent>
+        {editedOrder && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Order Details
+            </Typography>
+            <Grid container spacing={2} sx={{ mb: 2 }}>
               <Grid item xs={12} sm={6} md={3}>
                 <Typography variant="subtitle2" color="text.secondary">Order ID</Typography>
                 <Typography variant="body1">{editedOrder.id}</Typography>
@@ -1387,7 +1269,7 @@ export default function AdminDashboard() {
               </Grid>
               <Grid item xs={12} sm={6} md={3}>
                 <Typography variant="subtitle2" color="text.secondary">Status</Typography>
-                <FormControl fullWidth size="small" sx={{ mt: 1 }}>
+                <FormControl fullWidth size="small">
                   <Select
                     value={editedOrder.status || 'pending'}
                     onChange={(e) => setEditedOrder({...editedOrder, status: e.target.value})}
@@ -1395,7 +1277,6 @@ export default function AdminDashboard() {
                     <MenuItem value="pending">Pending</MenuItem>
                     <MenuItem value="in-progress">In Progress</MenuItem>
                     <MenuItem value="completed">Completed</MenuItem>
-                    <MenuItem value="paid">Paid</MenuItem>
                     <MenuItem value="cancelled">Cancelled</MenuItem>
                   </Select>
                 </FormControl>
@@ -1404,101 +1285,98 @@ export default function AdminDashboard() {
             
             <Typography variant="h6" gutterBottom>Order Items</Typography>
             
-            <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
-              <Table size="small">
+            <TableContainer>
+              <Table>
                 <TableHead>
                   <TableRow>
                     <TableCell>Item</TableCell>
                     <TableCell>Type</TableCell>
-                    <TableCell align="center">Quantity</TableCell>
                     <TableCell align="right">Price</TableCell>
-                    <TableCell align="right">Subtotal</TableCell>
-                    <TableCell align="center">Actions</TableCell>
+                    <TableCell align="right">Quantity</TableCell>
+                    <TableCell align="right">Total</TableCell>
+                    <TableCell align="right">Status</TableCell>
+                    <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {editedOrder.items && editedOrder.items.length > 0 ? (
-                    editedOrder.items.map((item) => (
+                  {console.log('Rendering order items:', editedOrder.items)}
+                  {editedOrder.items && editedOrder.items.map((item) => (
                       <TableRow key={item.id}>
-                        <TableCell>{item.name || <i>Unknown Item</i>}</TableCell>
+                      <TableCell>{item.name}</TableCell>
                         <TableCell>
                           <Chip
-                            label={item.item_type || 'food'} 
+                          label={item.item_type}
                             size="small"
                             color={item.item_type === 'food' ? 'secondary' : 'primary'}
                           />
                         </TableCell>
-                        <TableCell align="center">
+                      <TableCell align="right">
+                        ${Number(item.price).toFixed(2)}
+                      </TableCell>
+                      <TableCell align="right">
                           <TextField
                             type="number"
-                            size="small"
                             value={item.quantity}
-                            onChange={(e) => handleUpdateItem(item.id, 'quantity', parseInt(e.target.value) || 1)}
-                            InputProps={{ inputProps: { min: 1 } }}
-                            sx={{ width: '60px' }}
+                          onChange={(e) => handleUpdateItem(item.id, 'quantity', parseInt(e.target.value) || 0)}
+                          InputProps={{ inputProps: { min: 0 } }}
+                          size="small"
+                          sx={{ width: '80px' }}
                           />
                         </TableCell>
-                        <TableCell align="right">{formatCurrency(item.price ?? 0)}</TableCell>
-                        <TableCell align="right">{formatCurrency((item.price ?? 0) * (item.quantity ?? 1))}</TableCell>
-                        <TableCell align="center">
-                          <IconButton 
+                      <TableCell align="right">
+                        ${(Number(item.quantity) * Number(item.price)).toFixed(2)}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Select
+                          value={item.status || 'pending'}
+                          onChange={(e) => handleUpdateItem(item.id, 'status', e.target.value)}
                             size="small" 
-                            color="error"
+                        >
+                          <MenuItem value="pending">Pending</MenuItem>
+                          <MenuItem value="in-progress">In Progress</MenuItem>
+                          <MenuItem value="completed">Completed</MenuItem>
+                          <MenuItem value="cancelled">Cancelled</MenuItem>
+                        </Select>
+                      </TableCell>
+                      <TableCell align="right">
+                        <IconButton
                             onClick={() => handleRemoveItem(item.id)}
+                          color="error"
+                          size="small"
                           >
-                            <RemoveCircleIcon fontSize="small" />
+                          <DeleteIcon />
                           </IconButton>
                         </TableCell>
                       </TableRow>
-                    ))
-                  ) : (
+                  ))}
+                  {(!editedOrder.items || editedOrder.items.length === 0) && (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">
-                        <Typography>No items in this order</Typography>
+                      <TableCell colSpan={7} align="center">
+                        No items in this order
                       </TableCell>
                     </TableRow>
                   )}
                 </TableBody>
+                <TableFooter>
+                  <TableRow>
+                    <TableCell colSpan={4} align="right">
+                      <strong>Total Amount:</strong>
+                    </TableCell>
+                    <TableCell align="right" colSpan={3}>
+                      <strong>
+                        ${editedOrder.items?.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.price)), 0).toFixed(2)}
+                      </strong>
+                    </TableCell>
+                  </TableRow>
+                </TableFooter>
               </Table>
             </TableContainer>
-            
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-              <Typography variant="h6">Order Summary</Typography>
-              <Typography variant="h6">
-                Total: {formatCurrency(
-                  editedOrder.items && editedOrder.items.length > 0
-                    ? editedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
-                    : 0
-                )}
-              </Typography>
-            </Box>
-            
-            {editedOrder.items && currentOrder?.items && editedOrder.items.length !== currentOrder.items.length && (
-              <Alert severity="warning" sx={{ mb: 2 }}>
-                You have removed items from this order. This action cannot be undone once saved.
-              </Alert>
-            )}
-          </Box>
-        ) : (
-          <Box sx={{ py: 4, textAlign: 'center' }}>
-            <CircularProgress />
           </Box>
         )}
       </DialogContent>
       <DialogActions>
-              <Button
-          onClick={() => setEditDialogOpen(false)} 
-          startIcon={<CancelIcon />}
-        >
-          Cancel
-        </Button>
-        <Button 
-          onClick={handleSaveOrder} 
-          variant="contained" 
-                color="primary"
-          startIcon={<SaveIcon />}
-          disabled={!editedOrder}
-              >
+        <Button onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+        <Button onClick={handleSaveOrder} variant="contained" color="primary">
           Save Changes
               </Button>
       </DialogActions>

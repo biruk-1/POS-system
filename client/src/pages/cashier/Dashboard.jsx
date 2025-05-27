@@ -825,16 +825,12 @@ export default function CashierDashboard() {
 
   // Update the renderOrdersTable function to use the new date filter
   const renderOrdersTable = () => (
-    <Box>
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="h6">Recent Orders</Typography>
-        {renderDateFilter()}
-      </Box>
-      <TableContainer component={Paper}>
+    <TableContainer component={Paper} sx={{ mt: 2 }}>
         <Table>
           <TableHead>
             <TableRow>
               <TableCell>Order ID</TableCell>
+            <TableCell>Table</TableCell>
               <TableCell>Time</TableCell>
               <TableCell>Items</TableCell>
               <TableCell>Total</TableCell>
@@ -843,13 +839,36 @@ export default function CashierDashboard() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {filteredOrders.length > 0 ? (
+          {loading ? (
+            <TableRow>
+              <TableCell colSpan={7} align="center">
+                <CircularProgress size={24} />
+              </TableCell>
+            </TableRow>
+          ) : filteredOrders.length > 0 ? (
               filteredOrders.map((order) => (
-                <TableRow key={order.id}>
+              <TableRow key={order.id} hover>
                   <TableCell>{order.id}</TableCell>
-                  <TableCell>{new Date(order.created_at).toLocaleTimeString()}</TableCell>
-                  <TableCell>{order.items?.length || 0} items</TableCell>
-                  <TableCell>{formatCurrency(order.total_amount)}</TableCell>
+                <TableCell>Table {order.table_number}</TableCell>
+                <TableCell>
+                  {new Date(order.created_at).toLocaleString()}
+                  <Typography variant="caption" display="block" color="text.secondary">
+                    {getTimeAgo(order.created_at)}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2">
+                    {order.items?.reduce((total, item) => total + (parseInt(item.quantity) || 0), 0) || 0} items
+                  </Typography>
+                  {order.items?.map((item, idx) => (
+                    <Typography key={idx} variant="caption" display="block" color="text.secondary">
+                      {item.quantity}x {item.name}
+                    </Typography>
+                  ))}
+                </TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>
+                  {formatCurrency(order.total_amount || 0)}
+                </TableCell>
                   <TableCell>
                     <Chip
                       label={order.status}
@@ -858,118 +877,35 @@ export default function CashierDashboard() {
                     />
                   </TableCell>
                   <TableCell>
+                  <Stack direction="row" spacing={1}>
                     <IconButton
+                      size="small"
                       onClick={() => handleUpdateOrderStatus(order)}
-                      color="primary"
-                      size="small"
-                      title="Edit Order"
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      onClick={async () => {
-                        try {
-                          setUpdatingOrderId(order.id);
-                          const newStatus = 
-                            order.status === 'pending' ? 'in-progress' :
-                            order.status === 'in-progress' ? 'completed' :
-                            order.status === 'completed' ? 'paid' : 'pending';
-                          
-                          // Fetch detailed order data first
-                          const detailResponse = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
-                            headers: {
-                              Authorization: `Bearer ${token}`
-                            }
-                          });
-                          
-                          const detailedOrder = detailResponse.data;
-                          console.log('Fetched detailed order data for quick update:', detailedOrder);
-                          
-                          // Ensure we have the correct total amount
-                          const totalAmount = detailedOrder.total_amount || 
-                            (detailedOrder.items && detailedOrder.items.length > 0 
-                              ? detailedOrder.items.reduce((sum, item) => sum + (item.price * item.quantity), 0)
-                              : 0);
-                          
-                          const response = await axios.put(
-                            `http://localhost:5001/api/orders/${order.id}/status`, 
-                            {
-                              status: newStatus,
-                              payment_amount: newStatus === 'paid' ? totalAmount : 0
-                            }, 
-                            {
-                              headers: {
-                                Authorization: `Bearer ${token}`
-                              }
-                            }
-                          );
-                          
-                          // Update order in local state with detailed data
-                          setOrders(prevOrders => 
-                            prevOrders.map(o => 
-                              o.id === order.id ? { ...detailedOrder, status: newStatus } : o
-                            )
-                          );
-                          
-                          // Also update in filtered orders
-                          setFilteredOrders(prevOrders => 
-                            prevOrders.map(o => 
-                              o.id === order.id ? { ...detailedOrder, status: newStatus } : o
-                            )
-                          );
-                          
-                          setSnackbar({
-                            open: true,
-                            message: `Order ${order.id} status updated to ${newStatus}`,
-                            severity: 'success'
-                          });
-                          
-                          // Refresh dashboard data if needed
-                          if (newStatus === 'completed' || newStatus === 'paid') {
-                            fetchDashboardData();
-                          }
-                        } catch (error) {
-                          console.error('Error updating order status:', error);
-                          setSnackbar({
-                            open: true,
-                            message: 'Failed to update order status: ' + (error.response?.data?.message || error.message),
-                            severity: 'error'
-                          });
-                        } finally {
-                          setUpdatingOrderId(null);
-                        }
-                      }}
-                      color="success"
-                      size="small"
-                      title="Update Status"
                       disabled={updatingOrderId === order.id}
                     >
-                      <CheckCircleIcon />
+                      <EditIcon fontSize="small" />
                     </IconButton>
                     <IconButton
-                      onClick={() => handleGenerateReceipt(order)}
-                      color="secondary"
                       size="small"
-                      title="Print Receipt"
+                      onClick={() => handleGenerateReceipt(order)}
+                      disabled={order.status !== 'completed' && order.status !== 'paid'}
                     >
-                      <PrintIcon />
+                      <PrintIcon fontSize="small" />
                     </IconButton>
+                  </Stack>
                   </TableCell>
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={6} align="center">
-                  <Typography variant="body1" color="text.secondary">
-                    No orders found for the selected date
-                  </Typography>
+              <TableCell colSpan={7} align="center">
+                <Typography>No orders found for the selected date</Typography>
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </TableContainer>
-    </Box>
   );
 
   // Add effect to fetch orders when component mounts or date filter changes
