@@ -27,11 +27,11 @@ import {
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 
-// Add print styles
+// Update print styles to exactly match receipt
 const printStyles = `
   @media print {
     @page {
-      size: 58mm auto;
+      size: 58mm 180mm;
       margin: 0;
       padding: 0;
     }
@@ -45,11 +45,13 @@ const printStyles = `
       position: absolute;
       left: 0;
       top: 0;
-      width: 100%;
-      max-width: 58mm;
-      padding: 0;
+      width: 58mm;
+      height: auto;
+      min-height: 120mm;
+      padding: 5mm 2mm;
       margin: 0;
       box-shadow: none !important;
+      font-family: 'Courier New', monospace !important;
     }
     .no-print {
       display: none !important;
@@ -61,35 +63,36 @@ const printStyles = `
       overflow-x: hidden;
       background-color: #fff;
     }
-    /* Reduce font sizes for printing */
     .print-area h4 {
       font-size: 12pt !important;
-      margin: 3pt 0 !important;
+      margin: 4pt 0 !important;
+      text-align: center !important;
+      font-weight: bold !important;
     }
     .print-area h6 {
       font-size: 10pt !important;
-      margin: 2pt 0 !important;
+      margin: 3pt 0 !important;
+      font-weight: bold !important;
     }
     .print-area p, .print-area span {
-      font-size: 8pt !important;
-      margin: 1pt 0 !important;
+      font-size: 9pt !important;
+      margin: 2pt 0 !important;
+      letter-spacing: normal !important;
+      word-spacing: normal !important;
     }
-    /* Kitchen tickets need to be compact but clear */
     .print-area .MuiPaper-root {
       box-shadow: none !important;
-      padding: 0 !important;
-      margin-bottom: 8mm !important; /* Add space between tickets */
-      page-break-after: always !important;
+      padding: 2mm !important;
       width: 100% !important;
-      max-width: 58mm !important;
+      max-width: 54mm !important;
     }
     .print-area .MuiDivider-root {
-      margin: 2pt 0 !important;
+      margin: 3pt 0 !important;
+      background-color: #888 !important;
     }
-    /* Remove any extra spacing */
     .print-area * {
-      line-height: 1.1 !important;
-      max-width: 58mm !important;
+      line-height: 1.2 !important;
+      max-width: 54mm !important;
       overflow-x: hidden !important;
     }
   }
@@ -152,107 +155,130 @@ export default function OrderTicket() {
   }, []);
   
   const handlePrint = () => {
-    // Create a printable version of the tickets
     const printWindow = window.open('', '_blank', 'width=300,height=600');
     if (!printWindow) {
       alert('Please allow pop-ups to print tickets');
       return;
     }
-    
-    // Add the content to the new window
+
     printWindow.document.write(`
       <html>
         <head>
           <title>Order Tickets</title>
           <style>
             @page {
-              size: 58mm auto;
+              size: 58mm 180mm;
               margin: 0;
             }
             html, body {
               width: 58mm;
+              height: auto;
+              min-height: 120mm;
               margin: 0;
               padding: 0;
               overflow-x: hidden;
               background-color: white;
             }
             body {
-              font-family: 'Courier New', monospace; /* Use monospaced font for thermal printers */
+              font-family: 'Courier New', monospace;
               margin: 0;
-              padding: 0;
-              width: 58mm; /* Standard thermal receipt width */
+              padding: 4mm 2mm;
+              width: 58mm;
             }
             .ticket {
-              padding: 2px;
-              page-break-after: always;
+              padding: 3mm;
               width: 100%;
-              max-width: 58mm;
+              max-width: 54mm;
               overflow-x: hidden;
               box-sizing: border-box;
-              margin-bottom: 5mm;
+              page-break-after: always;
             }
             .header {
               text-align: center;
-              margin-bottom: 2px;
+              margin-bottom: 4mm;
             }
             .header h1 {
               font-size: 14px;
-              margin: 1px 0;
+              margin: 2mm 0;
               font-weight: bold;
+              letter-spacing: 0.5px;
             }
-            .header div {
+            .header p {
               font-size: 9px;
+              margin: 1mm 0;
+              color: #333;
             }
             .detail {
               display: flex;
               justify-content: space-between;
-              margin-bottom: 1px;
+              margin-bottom: 2mm;
               font-size: 9px;
+              line-height: 1.3;
             }
             .divider {
               border-top: 1px dashed #999;
-              margin: 3px 0;
+              margin: 3mm 0;
             }
             .item {
-              margin-bottom: 2px;
-              font-size: 10px;
-              font-weight: normal;
-              max-width: 58mm;
-              overflow: hidden;
+              display: flex;
+              justify-content: space-between;
+              margin-bottom: 2mm;
+              font-size: 9px;
+              line-height: 1.2;
             }
-            .quantity {
-              font-weight: bold;
-              font-size: 12px;
+            .item-details {
+              display: flex;
+              justify-content: space-between;
+              width: 100%;
+            }
+            .item-name {
+              flex: 2;
+              white-space: normal;
+              word-break: break-word;
+              font-size: 9px;
+              max-width: 30mm;
+              overflow: hidden;
+              padding-right: 2mm;
+            }
+            .item-qty {
+              flex: 0.5;
+              text-align: center;
+              font-size: 9px;
+            }
+            .item-price {
+              flex: 0.8;
+              text-align: right;
+              font-size: 9px;
             }
             .footer {
               text-align: center;
-              font-size: 8px;
-              margin-top: 4px;
-              font-weight: bold;
+              font-size: 9px;
+              margin-top: 5mm;
+              line-height: 1.4;
             }
             * {
-              line-height: 1.1;
-              max-width: 58mm;
+              line-height: 1.2;
+              max-width: 54mm;
               box-sizing: border-box;
-            }
-            h2 {
-              font-size: 12px;
-              margin: 3px 0;
-              text-decoration: underline;
-              font-weight: bold;
             }
           </style>
         </head>
         <body onload="window.print();">
     `);
-    
+
     // Add food ticket if it exists
     if (foodTicketData) {
       printWindow.document.write(`
         <div class="ticket">
           <div class="header">
+            <h1>MY RESTAURANT</h1>
+            <p>123 Restaurant St, Foodville, FC 12345</p>
+            <p>Tel: (123) 456-7890</p>
+          </div>
+          <div class="divider"></div>
+          <div class="header">
             <h1>KITCHEN ORDER</h1>
-            <div>*** DRAFT - NOT A RECEIPT ***</div>
+            <p>*** DRAFT - NOT A RECEIPT ***</p>
           </div>
           <div class="divider"></div>
           <div class="detail">
@@ -264,10 +290,18 @@ export default function OrderTicket() {
             <div>Table: ${foodTicketData.table || 'N/A'}</div>
           </div>
           <div class="divider"></div>
-          <h2>FOOD ITEMS</h2>
+          <div class="item">
+            <div class="item-details">
+              <div class="item-name"><strong>Item</strong></div>
+              <div class="item-qty"><strong>Qty</strong></div>
+            </div>
+          </div>
           ${foodTicketData.items.map(item => `
             <div class="item">
-              <span class="quantity">${item.quantity}x</span> ${item.name}
+              <div class="item-details">
+                <div class="item-name">${item.name}</div>
+                <div class="item-qty">${item.quantity}x</div>
+              </div>
               ${item.description ? `<div style="font-size: 8px; margin-left: 12px; margin-top: 1px;">${item.description}</div>` : ''}
             </div>
           `).join('')}
@@ -279,14 +313,20 @@ export default function OrderTicket() {
         </div>
       `);
     }
-    
+
     // Add drink ticket if it exists
     if (drinkTicketData) {
       printWindow.document.write(`
         <div class="ticket">
           <div class="header">
+            <h1>MY RESTAURANT</h1>
+            <p>123 Restaurant St, Foodville, FC 12345</p>
+            <p>Tel: (123) 456-7890</p>
+          </div>
+          <div class="divider"></div>
+          <div class="header">
             <h1>BAR ORDER</h1>
-            <div>*** DRAFT - NOT A RECEIPT ***</div>
+            <p>*** DRAFT - NOT A RECEIPT ***</p>
           </div>
           <div class="divider"></div>
           <div class="detail">
@@ -298,10 +338,18 @@ export default function OrderTicket() {
             <div>Table: ${drinkTicketData.table || 'N/A'}</div>
           </div>
           <div class="divider"></div>
-          <h2>DRINK ITEMS</h2>
+          <div class="item">
+            <div class="item-details">
+              <div class="item-name"><strong>Item</strong></div>
+              <div class="item-qty"><strong>Qty</strong></div>
+            </div>
+          </div>
           ${drinkTicketData.items.map(item => `
             <div class="item">
-              <span class="quantity">${item.quantity}x</span> ${item.name}
+              <div class="item-details">
+                <div class="item-name">${item.name}</div>
+                <div class="item-qty">${item.quantity}x</div>
+              </div>
               ${item.description ? `<div style="font-size: 8px; margin-left: 12px; margin-top: 1px;">${item.description}</div>` : ''}
             </div>
           `).join('')}
@@ -313,11 +361,9 @@ export default function OrderTicket() {
         </div>
       `);
     }
-    
+
     printWindow.document.write('</body></html>');
     printWindow.document.close();
-    
-    // Auto-print will be triggered by onload in the body tag
   };
   
   const handleBack = () => {

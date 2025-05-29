@@ -86,6 +86,13 @@ const initializeDB = async () => {
           billStore.createIndex('order_id', 'order_id', { unique: false });
           billStore.createIndex('status', 'status', { unique: false });
         }
+
+        // Reports store
+        if (!db.objectStoreNames.contains('reports')) {
+          const reportStore = db.createObjectStore('reports', { keyPath: 'id' });
+          reportStore.createIndex('type', 'type', { unique: false });
+          reportStore.createIndex('date', 'date', { unique: false });
+        }
       },
       blocked(currentVersion, blockedVersion, event) {
         console.log('Database blocked:', { currentVersion, blockedVersion, event });

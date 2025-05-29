@@ -119,68 +119,68 @@ export default function OrderEntry() {
         setLoading(true);
         setError('');
 
-        let itemsData, tablesData, waitersData;
+        let itemsData = [], tablesData = [], waitersData = [];
 
         if (offlineMode) {
           // Load data from IndexedDB in parallel
-          [itemsData, tablesData, waitersData] = await Promise.all([
-            getMenuItemsOffline().catch(error => {
-              console.error('Error loading offline menu items:', error);
-              return [];
-            }),
-            getTablesOffline().catch(error => {
-              console.error('Error loading offline tables:', error);
-              return [];
-            }),
-            userOperations.getAllUsers().catch(error => {
-              console.error('Error loading offline users:', error);
-              return [];
-            })
-          ]);
-          
-          // Filter waiters from users
-          waitersData = Array.isArray(waitersData) 
-            ? waitersData.filter(user => user.role === 'waiter')
-            : [];
+          try {
+            [itemsData, tablesData, waitersData] = await Promise.all([
+              getMenuItemsOffline(),
+              getTablesOffline(),
+              userOperations.getAllUsers()
+            ]);
+            
+            // Filter waiters from users
+            waitersData = Array.isArray(waitersData) 
+              ? waitersData.filter(user => user.role === 'waiter')
+              : [];
+
+            // If any of the data is missing, throw an error
+            if (!itemsData || !tablesData || !waitersData) {
+              throw new Error('Some offline data is missing');
+            }
+          } catch (offlineError) {
+            console.error('Error loading offline data:', offlineError);
+            throw new Error('Failed to load offline data. Please try again when online.');
+          }
         } else {
           try {
             // Load data from API in parallel
-          const [itemsRes, tablesRes, waitersRes] = await Promise.all([
-            api.get('/api/items'),
-            api.get('/api/tables'),
-            api.get('/api/waiters')
-          ]);
+            const [itemsRes, tablesRes, waitersRes] = await Promise.all([
+              api.get('/api/items'),
+              api.get('/api/tables'),
+              api.get('/api/waiters')
+            ]);
 
             itemsData = itemsRes.data;
             tablesData = tablesRes.data;
             waitersData = waitersRes.data;
 
-          // Cache data for offline use
+            // Cache data for offline use
             await Promise.all([
-              saveMenuItemsOffline(itemsData).catch(error => 
-                console.error('Error caching menu items:', error)
-              ),
-              saveTablesOffline(tablesData).catch(error => 
-                console.error('Error caching tables:', error)
-              ),
-              saveUsersData(waitersData).catch(error => 
-                console.error('Error caching waiters:', error)
-              )
+              saveMenuItemsOffline(itemsData),
+              saveTablesOffline(tablesData),
+              saveUsersData(waitersData)
             ]);
           } catch (apiError) {
             console.error('API Error:', apiError);
             // If API fails, try to load from offline storage
-            [itemsData, tablesData, waitersData] = await Promise.all([
-              getMenuItemsOffline(),
-              getTablesOffline(),
-              userOperations.getAllUsers().then(users => 
-                users.filter(user => user.role === 'waiter')
-              )
-            ]);
+            try {
+              [itemsData, tablesData, waitersData] = await Promise.all([
+                getMenuItemsOffline(),
+                getTablesOffline(),
+                userOperations.getAllUsers().then(users => 
+                  users.filter(user => user.role === 'waiter')
+                )
+              ]);
 
-            if (!itemsData.length && !tablesData.length && !waitersData.length) {
-              throw new Error('Failed to load data from both API and offline storage');
-          }
+              if (!itemsData || !tablesData || !waitersData) {
+                throw new Error('Failed to load data from both API and offline storage');
+              }
+            } catch (offlineError) {
+              console.error('Offline fallback error:', offlineError);
+              throw new Error('Failed to load data. Please check your connection and try again.');
+            }
           }
         }
 

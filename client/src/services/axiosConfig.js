@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const instance = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5001',
+  baseURL: 'http://localhost:5001',
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json'
@@ -47,11 +47,13 @@ instance.interceptors.response.use(
       case 401:
         if (!error.config.url.includes('/auth/login')) {
           localStorage.removeItem('token');
+          localStorage.removeItem('user');
           window.location.href = '/login';
         }
         return Promise.reject(error);
       case 403:
         localStorage.removeItem('token');
+        localStorage.removeItem('user');
         if (!error.config.url.includes('/auth/login')) {
           window.location.href = '/login';
         }
@@ -62,6 +64,7 @@ instance.interceptors.response.use(
   }
 );
 
+// Add timeout handling
 instance.interceptors.request.use((config) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {

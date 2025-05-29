@@ -132,16 +132,8 @@ const Login = () => {
             throw new Error('Invalid password');
           }
 
-          localStorage.setItem('user', JSON.stringify(user));
           const offlineToken = `offline_${Date.now()}`;
-          localStorage.setItem('token', offlineToken);
-          
-          dispatch(setCredentials({
-            user,
-            token: offlineToken
-          }));
-
-          navigate(`/${user.role.toLowerCase()}/dashboard`);
+          await handleSuccessfulLogin(user, offlineToken, true);
         } else {
           console.log('Attempting cashier offline login with phone:', phoneNumber);
           const user = await getUserByPhone(phoneNumber.trim());
@@ -153,19 +145,10 @@ const Login = () => {
             throw new Error('Invalid password');
           }
 
-          localStorage.setItem('user', JSON.stringify(user));
           const offlineToken = `offline_${Date.now()}`;
-          localStorage.setItem('token', offlineToken);
-          
-          dispatch(setCredentials({
-            user,
-            token: offlineToken
-          }));
-
-          navigate('/cashier/dashboard');
+          await handleSuccessfulLogin(user, offlineToken, true);
         }
       } else {
-        let response;
         const loginData = activeTab === 0 
           ? { username: username.trim(), password }
           : { phone_number: phoneNumber.trim(), password };
@@ -176,7 +159,7 @@ const Login = () => {
         });
 
         try {
-          response = await axios.post('/api/auth/login', loginData);
+          const response = await axios.post('/api/auth/login', loginData);
           console.log('Login response:', response.data);
 
           if (!response.data?.token || !response.data?.user) {
@@ -198,19 +181,7 @@ const Login = () => {
             // Continue with login even if offline save fails
           }
 
-          localStorage.setItem('token', response.data.token);
-          localStorage.setItem('user', JSON.stringify(response.data.user));
-          
-          dispatch(setCredentials({
-            user: response.data.user,
-            token: response.data.token
-          }));
-
-          const targetPath = activeTab === 0 
-            ? `/${response.data.user.role.toLowerCase()}/dashboard`
-            : '/cashier/dashboard';
-          
-          navigate(targetPath);
+          await handleSuccessfulLogin(response.data.user, response.data.token, false);
         } catch (apiError) {
           console.error('API request failed:', apiError);
           if (apiError.response?.status === 403) {

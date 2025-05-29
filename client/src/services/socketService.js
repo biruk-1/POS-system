@@ -75,11 +75,6 @@ class SocketService {
       return;
     }
 
-    if (!token) {
-      console.log('No token available for socket connection');
-      return;
-    }
-
     try {
       if (this.socket) {
         this.socket.close();
@@ -95,7 +90,8 @@ class SocketService {
         reconnectionDelay: 2000,
         timeout: 10000,
         forceNew: true,
-        autoConnect: false
+        autoConnect: false,
+        query: { token }
       });
 
       this.setupEventListeners();
@@ -137,14 +133,26 @@ class SocketService {
           this.connectionAttempts++;
           console.log(`Retrying connection (${this.connectionAttempts}/${this.maxRetries})`);
           setTimeout(() => {
-            this.socket.connect();
+            const token = localStorage.getItem('token');
+            if (token) {
+              this.socket.auth = { token };
+              this.socket.connect();
+            } else {
+              reject(new Error('No token available for socket connection'));
+            }
           }, this.retryDelay);
         } else {
           reject(error);
         }
       });
 
-      this.socket.connect();
+      const token = localStorage.getItem('token');
+      if (token) {
+        this.socket.auth = { token };
+        this.socket.connect();
+      } else {
+        reject(new Error('No token available for socket connection'));
+      }
     });
   }
 
@@ -154,8 +162,10 @@ class SocketService {
     this.socket.on('disconnect', (reason) => {
       console.log('Socket disconnected:', reason);
       if (reason === 'io server disconnect') {
-        // Server disconnected us, try to reconnect
-        setTimeout(() => this.connect(), this.retryDelay);
+        const token = localStorage.getItem('token');
+        if (token) {
+          setTimeout(() => this.connect(token), this.retryDelay);
+        }
       }
     });
 
@@ -164,9 +174,12 @@ class SocketService {
       this.handleConnectionError(error);
     });
 
-    // Handle reconnection
     this.socket.io.on('reconnect', (attempt) => {
       console.log('Socket reconnected after', attempt, 'attempts');
+      const token = localStorage.getItem('token');
+      if (token) {
+        this.socket.auth = { token };
+      }
       this.processEventQueue();
     });
 

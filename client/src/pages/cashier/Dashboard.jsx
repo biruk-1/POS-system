@@ -215,7 +215,7 @@ export default function CashierDashboard() {
         try {
         const response = await axios.get('http://localhost:5001/api/dashboard/cashier', {
             headers: { Authorization: `Bearer ${token}` }
-        });
+          });
           dashboardData = response.data;
           
           // Cache dashboard data for offline use
@@ -225,14 +225,64 @@ export default function CashierDashboard() {
           // On API error, try to load from offline storage
           dashboardData = await offlineService.getOfflineDashboardData();
           if (!dashboardData) {
-            throw new Error('Failed to load dashboard data from both API and offline storage');
+            // If no offline data, calculate from offline orders
+            const offlineOrders = await offlineService.getOfflineOrders();
+            if (offlineOrders && offlineOrders.length > 0) {
+              dashboardData = {
+                totalSales: offlineOrders.reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0),
+                pendingOrders: offlineOrders.filter(o => o.status === 'pending').length,
+                completedOrders: offlineOrders.filter(o => o.status === 'completed' || o.status === 'paid').length,
+                dailyRevenue: offlineOrders
+                  .filter(o => {
+                    const orderDate = new Date(o.created_at).toISOString().split('T')[0];
+                    const today = new Date().toISOString().split('T')[0];
+                    return orderDate === today;
+                  })
+                  .reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0),
+                salesByCategory: {
+                  food: offlineOrders.reduce((sum, order) => 
+                    sum + (order.items?.filter(i => i.item_type === 'food')
+                      .reduce((itemSum, item) => itemSum + (parseFloat(item.price || 0) * parseInt(item.quantity || 0)), 0) || 0), 0),
+                  drinks: offlineOrders.reduce((sum, order) => 
+                    sum + (order.items?.filter(i => i.item_type === 'drink')
+                      .reduce((itemSum, item) => itemSum + (parseFloat(item.price || 0) * parseInt(item.quantity || 0)), 0) || 0), 0)
+                }
+              };
+      } else {
+              throw new Error('No offline data available');
+            }
           }
         }
       } else {
         // Load from offline storage
         dashboardData = await offlineService.getOfflineDashboardData();
         if (!dashboardData) {
-          throw new Error('No offline dashboard data available');
+          // If no offline data, calculate from offline orders
+          const offlineOrders = await offlineService.getOfflineOrders();
+          if (offlineOrders && offlineOrders.length > 0) {
+            dashboardData = {
+              totalSales: offlineOrders.reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0),
+              pendingOrders: offlineOrders.filter(o => o.status === 'pending').length,
+              completedOrders: offlineOrders.filter(o => o.status === 'completed' || o.status === 'paid').length,
+              dailyRevenue: offlineOrders
+                .filter(o => {
+                  const orderDate = new Date(o.created_at).toISOString().split('T')[0];
+                  const today = new Date().toISOString().split('T')[0];
+                  return orderDate === today;
+                })
+                .reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0),
+              salesByCategory: {
+                food: offlineOrders.reduce((sum, order) => 
+                  sum + (order.items?.filter(i => i.item_type === 'food')
+                    .reduce((itemSum, item) => itemSum + (parseFloat(item.price || 0) * parseInt(item.quantity || 0)), 0) || 0), 0),
+                drinks: offlineOrders.reduce((sum, order) => 
+                  sum + (order.items?.filter(i => i.item_type === 'drink')
+                    .reduce((itemSum, item) => itemSum + (parseFloat(item.price || 0) * parseInt(item.quantity || 0)), 0) || 0), 0)
+              }
+            };
+          } else {
+            throw new Error('No offline data available');
+          }
         }
       }
       
