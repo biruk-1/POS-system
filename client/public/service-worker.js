@@ -1,172 +1,201 @@
-const CACHE_NAME = 'pos-cache-v1';
-const OFFLINE_URL = '/offline.html';
-const API_CACHE_NAME = 'pos-api-cache-v1';
-const AUTH_CACHE_NAME = 'pos-auth-cache-v1';
-
-const STATIC_RESOURCES = [
+const CACHE_NAME = 'pos-system-v1';
+const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/offline.html',
-  '/static/js/main.chunk.js',
-  '/static/js/0.chunk.js',
-  '/static/js/bundle.js',
   '/manifest.json',
   '/favicon.ico'
 ];
 
-// Install event - cache static resources
+const API_CACHE_NAME = 'pos-api-cache-v1';
+const API_ROUTES = [
+  '/api/items',
+  '/api/tables',
+  '/api/waiters',
+  '/api/orders',
+  '/api/dashboard/cashier'
+];
+
+// Install event - cache static assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(STATIC_RESOURCES);
+    Promise.all([
+      // Cache static assets
+      caches.open(CACHE_NAME).then((cache) => {
+        console.log('Caching static assets');
+        return cache.addAll(STATIC_ASSETS);
+      }),
+      // Cache API routes
+      caches.open(API_CACHE_NAME).then((cache) => {
+        console.log('Caching API routes');
+        return Promise.all(
+          API_ROUTES.map(route => 
+            fetch(`http://localhost:5001${route}`)
+              .then(response => {
+                if (response.ok) {
+                  return cache.put(route, response);
+                }
+              })
+              .catch(error => console.error(`Failed to cache ${route}:`, error))
+          )
+        );
       })
-      .then(() => self.skipWaiting())
+    ])
   );
 });
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    Promise.all([
+      caches.keys().then((cacheNames) => {
+        return Promise.all(
+          cacheNames
+            .filter((cacheName) => 
+              cacheName !== CACHE_NAME && cacheName !== API_CACHE_NAME
+            )
+            .map((cacheName) => caches.delete(cacheName))
+        );
+      }),
+      // Claim clients
+      self.clients.claim()
+    ])
   );
 });
 
-// Helper function to check if a request is a login request
-const isLoginRequest = (url) => {
-  return url.includes('/api/auth/login') || 
-         url.includes('/api/auth/pin-login') || 
-         url.includes('/api/auth/cashier-login');
-};
-
-// Helper function to check if a request is for a static asset
-const isStaticAsset = (url) => {
-  return STATIC_RESOURCES.some(asset => url.includes(asset));
-};
-
-// Helper function to check if a request is for an API endpoint
-const isApiRequest = (url) => {
-  return url.includes('/api/');
-};
-
-// Helper function to get cached credentials
-const getCachedCredentials = async () => {
-  try {
-    const cache = await caches.open(AUTH_CACHE_NAME);
-    const response = await cache.match('/api/auth/login');
-    if (response) {
-      return await response.json();
-    }
-    return null;
-  } catch (error) {
-    console.error('Error getting cached credentials:', error);
-    return null;
+// Helper function to check if URL should be cached
+const shouldCache = (url) => {
+  const urlObj = new URL(url);
+  // Skip caching for chrome-extension URLs and other non-HTTP(S) schemes
+  if (!['http:', 'https:'].includes(urlObj.protocol)) {
+    return false;
   }
+  // Skip caching for certain file types
+  if (url.match(/\.(mp4|webm|ogg|mp3|wav|pdf|doc|docx|xls|xlsx)$/i)) {
+    return false;
+  }
+  return true;
 };
 
-// Fetch event - handle offline/online requests
+// Fetch event - handle offline requests
 self.addEventListener('fetch', (event) => {
-  // Skip cross-origin requests
-  if (!event.request.url.startsWith(self.location.origin)) {
+  const url = new URL(event.request.url);
+
+  // Skip non-GET requests and non-cacheable URLs
+  if (event.request.method !== 'GET' || !shouldCache(event.request.url)) {
     return;
   }
 
   // Handle API requests
-  if (event.request.url.includes('/api/')) {
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request)
-        .catch(() => {
-          // Return a custom offline response for API requests
-          return new Response(JSON.stringify({ error: 'You are offline' }), {
-            headers: { 'Content-Type': 'application/json' }
-          });
+        .then(async (response) => {
+          // Cache successful responses
+          if (response.ok) {
+            const cache = await caches.open(API_CACHE_NAME);
+            cache.put(event.request, response.clone());
+          }
+          return response;
+        })
+        .catch(async () => {
+          // On network failure, try to get from cache
+          const cachedResponse = await caches.match(event.request);
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          // If not in cache, return offline response
+          return new Response(
+            JSON.stringify({
+              error: 'You are offline and the requested data is not cached.'
+            }),
+            {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' }
+            }
+          );
         })
     );
     return;
   }
 
-  // Handle static resources
+  // Handle static asset requests
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
         if (response) {
           return response;
         }
-
         return fetch(event.request)
-          .then((response) => {
-            // Check if we received a valid response
-            if (!response || response.status !== 200 || response.type !== 'basic') {
-              return response;
+          .then(async (networkResponse) => {
+            if (networkResponse.ok && shouldCache(event.request.url)) {
+              const cache = await caches.open(CACHE_NAME);
+              cache.put(event.request, networkResponse.clone());
             }
-
-            // Clone the response
-            const responseToCache = response.clone();
-
-            caches.open(CACHE_NAME)
-              .then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-
-            return response;
+            return networkResponse;
           })
           .catch(() => {
-            // If offline and requesting a page, return offline page
+            // Return offline page for navigation requests
             if (event.request.mode === 'navigate') {
-              return caches.match(OFFLINE_URL);
+              return caches.match('/offline.html');
             }
-            return new Response('Offline', { status: 503 });
+            return new Response(
+              'Network error happened',
+              {
+                status: 408,
+                headers: { 'Content-Type': 'text/plain' },
+              }
+            );
           });
       })
   );
 });
 
-// Background sync for offline data
+// Handle sync events for offline data
 self.addEventListener('sync', (event) => {
   if (event.tag === 'sync-orders') {
     event.waitUntil(syncOrders());
   }
 });
 
-// Helper function to sync orders
-const syncOrders = async () => {
+// Function to sync offline orders
+async function syncOrders() {
   try {
-    const db = await openDB('pos-system-db', 1);
-    const pendingOrders = await db.getAllFromIndex('syncQueue', 'status', 'pending');
+    const cache = await caches.open(API_CACHE_NAME);
+    const offlineOrders = await cache.match('/api/offline-orders');
     
-    for (const order of pendingOrders) {
+    if (offlineOrders) {
+      const orders = await offlineOrders.json();
+      
+      // Try to sync each order
+      await Promise.all(
+        orders.map(async (order) => {
       try {
         const response = await fetch('/api/orders', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+                'Content-Type': 'application/json'
           },
-          body: JSON.stringify(order.data)
+              body: JSON.stringify(order)
         });
         
         if (response.ok) {
-          await db.put('syncQueue', {
-            ...order,
-            status: 'synced'
-          });
+              // Remove synced order from offline storage
+              const updatedOrders = orders.filter(o => o.id !== order.id);
+              await cache.put(
+                '/api/offline-orders',
+                new Response(JSON.stringify(updatedOrders))
+              );
         }
       } catch (error) {
-        console.error('Error syncing order:', error);
+            console.error(`Failed to sync order ${order.id}:`, error);
       }
+        })
+      );
     }
   } catch (error) {
-    console.error('Error in sync process:', error);
+    console.error('Error syncing orders:', error);
   }
-};
+}
 
 // Handle push notifications
 self.addEventListener('push', (event) => {

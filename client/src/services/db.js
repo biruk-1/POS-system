@@ -1,19 +1,31 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'pos-system-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Match version with offlineService.js
 
 // Initialize database
 let dbPromise = null;
+let isInitializing = false;
 
 const initializeDB = async () => {
-  if (!dbPromise) {
+  if (isInitializing) {
+    return dbPromise;
+  }
+
+  if (dbPromise) {
+    return dbPromise;
+  }
+
+  isInitializing = true;
+
+  try {
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion, newVersion, transaction) {
         // Users store
         if (!db.objectStoreNames.contains('users')) {
           const userStore = db.createObjectStore('users', { keyPath: 'id' });
           userStore.createIndex('username', 'username', { unique: true });
+          userStore.createIndex('phone_number', 'phone_number', { unique: false });
           userStore.createIndex('role', 'role', { unique: false });
         }
 
@@ -24,6 +36,14 @@ const initializeDB = async () => {
           orderStore.createIndex('created_at', 'created_at', { unique: false });
           orderStore.createIndex('cashier_id', 'cashier_id', { unique: false });
           orderStore.createIndex('isOffline', 'isOffline', { unique: false });
+        }
+
+        // Tables store
+        if (!db.objectStoreNames.contains('tables')) {
+          const tableStore = db.createObjectStore('tables', { keyPath: 'id' });
+          tableStore.createIndex('status', 'status', { unique: false });
+          tableStore.createIndex('number', 'number', { unique: true });
+          tableStore.createIndex('capacity', 'capacity', { unique: false });
         }
 
         // Receipts store
@@ -45,30 +65,61 @@ const initializeDB = async () => {
           menuStore.createIndex('type', 'type', { unique: false });
         }
 
-        // Tables store
-        if (!db.objectStoreNames.contains('tables')) {
-          const tableStore = db.createObjectStore('tables', { keyPath: 'id' });
-          tableStore.createIndex('status', 'status', { unique: false });
-        }
-
-        // Reports store
-        if (!db.objectStoreNames.contains('reports')) {
-          const reportStore = db.createObjectStore('reports', { keyPath: 'id' });
-          reportStore.createIndex('type', 'type', { unique: false });
-          reportStore.createIndex('date', 'date', { unique: false });
-        }
-
         // Sync queue store
         if (!db.objectStoreNames.contains('syncQueue')) {
           const syncStore = db.createObjectStore('syncQueue', { keyPath: 'id', autoIncrement: true });
           syncStore.createIndex('type', 'type', { unique: false });
           syncStore.createIndex('status', 'status', { unique: false });
-          syncStore.createIndex('retry_count', 'retry_count', { unique: false });
+          syncStore.createIndex('created_at', 'created_at', { unique: false });
+        }
+
+        // Waiters store
+        if (!db.objectStoreNames.contains('waiters')) {
+          const waiterStore = db.createObjectStore('waiters', { keyPath: 'id', autoIncrement: true });
+          waiterStore.createIndex('username', 'username', { unique: true });
+          waiterStore.createIndex('name', 'name', { unique: false });
+        }
+
+        // Bill requests store
+        if (!db.objectStoreNames.contains('billRequests')) {
+          const billStore = db.createObjectStore('billRequests', { keyPath: 'id', autoIncrement: true });
+          billStore.createIndex('order_id', 'order_id', { unique: false });
+          billStore.createIndex('status', 'status', { unique: false });
         }
       },
+      blocked(currentVersion, blockedVersion, event) {
+        console.log('Database blocked:', { currentVersion, blockedVersion, event });
+        // Close any existing connections
+        if (dbPromise) {
+          dbPromise.then(db => db.close());
+          dbPromise = null;
+        }
+      },
+      blocking(currentVersion, blockedVersion, event) {
+        console.log('Database blocking:', { currentVersion, blockedVersion, event });
+        // Close this connection so other tabs can upgrade
+        if (dbPromise) {
+          dbPromise.then(db => db.close());
+          dbPromise = null;
+        }
+      },
+      terminated() {
+        console.log('Database connection terminated');
+        dbPromise = null;
+        isInitializing = false;
+      }
     });
+
+    const db = await dbPromise;
+    console.log('Database initialized successfully:', db.version);
+    return db;
+  } catch (error) {
+    console.error('Failed to initialize database:', error);
+    dbPromise = null;
+    throw error;
+  } finally {
+    isInitializing = false;
   }
-  return dbPromise;
 };
 
 // Helper function to get database instance

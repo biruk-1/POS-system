@@ -41,7 +41,10 @@ const io = socketIO(server, {
   transports: ['websocket', 'polling'],
   allowEIO3: true,
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  path: '/socket.io/',
+  connectTimeout: 45000,
+  allowUpgrades: true
 });
 
 const PORT = process.env.PORT || 5001;
@@ -2236,7 +2239,7 @@ app.get('/api/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, 
 app.get('/api/admin/sales/:timeRange', authenticateToken, checkRole(['admin']), (req, res) => {
     const { timeRange } = req.params;
   const { waiterId, date } = req.query;
-  
+
   let dateFilter = '';
   let dateGrouping = '';
   let params = [];
@@ -2269,8 +2272,8 @@ app.get('/api/admin/sales/:timeRange', authenticateToken, checkRole(['admin']), 
     default:
       dateFilter = "DATE(o.created_at) = DATE('now')";
       dateGrouping = "DATE(o.created_at)";
-        }
-  
+    }
+
   // Add waiter filter if specified
   const waiterFilter = waiterId && waiterId !== 'all' 
     ? "AND o.waiter_id = ?" 

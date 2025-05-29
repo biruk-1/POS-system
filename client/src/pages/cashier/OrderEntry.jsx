@@ -119,64 +119,84 @@ export default function OrderEntry() {
         setLoading(true);
         setError('');
 
+        let itemsData, tablesData, waitersData;
+
         if (offlineMode) {
-          // Load data from IndexedDB
-          const [offlineItems, offlineTables, offlineWaiters] = await Promise.all([
-            getMenuItemsOffline(),
-            getTablesOffline(),
-            userOperations.getAllUsers()
+          // Load data from IndexedDB in parallel
+          [itemsData, tablesData, waitersData] = await Promise.all([
+            getMenuItemsOffline().catch(error => {
+              console.error('Error loading offline menu items:', error);
+              return [];
+            }),
+            getTablesOffline().catch(error => {
+              console.error('Error loading offline tables:', error);
+              return [];
+            }),
+            userOperations.getAllUsers().catch(error => {
+              console.error('Error loading offline users:', error);
+              return [];
+            })
           ]);
-
-          // Ensure items is an array
-          setItems(Array.isArray(offlineItems) ? offlineItems : []);
           
-          // Filter waiters from all users and ensure it's an array
-          const waitersList = Array.isArray(offlineWaiters) 
-            ? offlineWaiters.filter(user => user.role === 'waiter')
+          // Filter waiters from users
+          waitersData = Array.isArray(waitersData) 
+            ? waitersData.filter(user => user.role === 'waiter')
             : [];
-          setWaiters(waitersList);
-
-          console.log('Loaded offline waiters:', waitersList);
         } else {
-          // Load data from API
-          console.log('Loading data from API...');
+          try {
+            // Load data from API in parallel
           const [itemsRes, tablesRes, waitersRes] = await Promise.all([
             api.get('/api/items'),
             api.get('/api/tables'),
             api.get('/api/waiters')
           ]);
 
-          console.log('API Responses:', {
-            items: itemsRes.data,
-            tables: tablesRes.data,
-            waiters: waitersRes.data
-          });
-
-          // Ensure items is an array
-          setItems(Array.isArray(itemsRes.data) ? itemsRes.data : []);
-          setWaiters(Array.isArray(waitersRes.data) ? waitersRes.data : []);
+            itemsData = itemsRes.data;
+            tablesData = tablesRes.data;
+            waitersData = waitersRes.data;
 
           // Cache data for offline use
-          if (Array.isArray(itemsRes.data)) {
-            await saveMenuItemsOffline(itemsRes.data);
+            await Promise.all([
+              saveMenuItemsOffline(itemsData).catch(error => 
+                console.error('Error caching menu items:', error)
+              ),
+              saveTablesOffline(tablesData).catch(error => 
+                console.error('Error caching tables:', error)
+              ),
+              saveUsersData(waitersData).catch(error => 
+                console.error('Error caching waiters:', error)
+              )
+            ]);
+          } catch (apiError) {
+            console.error('API Error:', apiError);
+            // If API fails, try to load from offline storage
+            [itemsData, tablesData, waitersData] = await Promise.all([
+              getMenuItemsOffline(),
+              getTablesOffline(),
+              userOperations.getAllUsers().then(users => 
+                users.filter(user => user.role === 'waiter')
+              )
+            ]);
+
+            if (!itemsData.length && !tablesData.length && !waitersData.length) {
+              throw new Error('Failed to load data from both API and offline storage');
           }
-          if (Array.isArray(tablesRes.data)) {
-            await saveTablesOffline(tablesRes.data);
-          }
-          if (Array.isArray(waitersRes.data)) {
-            // Save waiters to IndexedDB for offline use
-            await saveUsersData(waitersRes.data);
           }
         }
+
+        // Update state with loaded data
+        setItems(Array.isArray(itemsData) ? itemsData : []);
+        setWaiters(Array.isArray(waitersData) ? waitersData : []);
+
+        // Log loaded data for debugging
+        console.log('Loaded Data:', {
+          items: itemsData.length,
+          waiters: waitersData.length
+        });
       } catch (error) {
-        console.error('Error loading data:', error);
-        if (error.response?.status === 403) {
-          // Token expired or invalid
-          localStorage.removeItem('token');
-          navigate('/login');
-        } else {
-          setError(`Failed to load data: ${error.response?.data?.error || error.message}`);
-        }
+        console.error('Error in loadData:', error);
+        setError(error.message || 'Failed to load required data');
+        
         // Set empty arrays as fallback
         setItems([]);
         setWaiters([]);
@@ -186,7 +206,7 @@ export default function OrderEntry() {
     };
 
     loadData();
-  }, [offlineMode, navigate]);
+  }, [offlineMode]);
   
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -202,7 +222,7 @@ export default function OrderEntry() {
           : cartItem
       ));
     } else {
-      setCart([...cart, { ...item, quantity: 1 }]);
+      setCart([...cart, { ...item, quantity: 1, item_type: item.item_type || 'other' }]);
     }
   };
   
@@ -609,7 +629,7 @@ export default function OrderEntry() {
                             {item.name}
                           </Typography>
                           <Chip 
-                            label={item.item_type.toUpperCase()} 
+                            label={(item.item_type || 'other').toUpperCase()} 
                             size="small"
                             color={item.item_type === 'food' ? 'secondary' : 'primary'}
                           />
@@ -707,7 +727,7 @@ export default function OrderEntry() {
                       >
                         <ListItemText
                           primary={`${item.name} - ${formatCurrency(item.price)}`}
-                          secondary={`${item.item_type.toUpperCase()}`}
+                          secondary={`${(item.item_type || 'other').toUpperCase()}`}
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', ml: 2 }}>
                           <IconButton 

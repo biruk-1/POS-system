@@ -389,19 +389,12 @@ export default function AdminDashboard() {
   }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
 
   // Completely rewritten fetch sales function for admin
-  const fetchAdminSales = async (timeRangeParam = timeRange, waiterId = selectedWaiter) => {
+  const fetchAdminSales = async (timeRangeParam = timeRange, waiterId = selectedWaiter, customDateParam = customDate) => {
     try {
-      // Ensure we have a valid timeRange
       if (!timeRangeParam) {
         console.error('No timeRange provided for sales fetch');
         return;
       }
-
-      console.log('Fetching admin sales data for:', {
-        timeRange: timeRangeParam,
-        waiterId,
-        customDate: customDate ? customDate.toISOString().split('T')[0] : null
-      });
 
       let url = `http://localhost:5001/api/admin/sales/${timeRangeParam}`;
       const params = new URLSearchParams();
@@ -410,12 +403,11 @@ export default function AdminDashboard() {
         params.append('waiterId', waiterId);
       }
 
-      // Handle custom date
-      if (timeRangeParam === 'custom' && customDate) {
-        params.append('customDate', customDate.toISOString().split('T')[0]);
+      // Use 'date' as the query parameter for custom date
+      if (timeRangeParam === 'custom' && customDateParam) {
+        params.append('date', customDateParam.toISOString().split('T')[0]);
       }
 
-      // Add cache buster
       params.append('_t', Date.now());
 
       const response = await fetch(`${url}?${params.toString()}`, {
@@ -429,9 +421,6 @@ export default function AdminDashboard() {
       }
 
       const data = await response.json();
-      console.log('Sales data received:', data);
-
-      // Update sales data with proper type conversion
       setSales({
         totalSales: parseFloat(data.totalSales) || 0,
         completedOrders: parseInt(data.completedOrders) || 0,
@@ -443,12 +432,6 @@ export default function AdminDashboard() {
         })) : []
       });
     } catch (error) {
-      console.error('Error fetching admin sales:', error);
-      console.error('Error details:', {
-        message: error.message,
-        response: error.response,
-        status: error.status
-      });
       setSnackbar({
         open: true,
         message: 'Failed to fetch sales data',
@@ -790,7 +773,6 @@ export default function AdminDashboard() {
   // Add handleCustomDateChange
   const handleCustomDateChange = async (date) => {
     if (!date) {
-      // If date is cleared, reset to daily view
       setTimeRange('daily');
       setShowCustomDatePicker(false);
       setCustomDate(null);
@@ -798,49 +780,15 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Ensure date is a Date object
     const dateObj = date instanceof Date ? date : new Date(date);
     if (isNaN(dateObj.getTime())) {
-      console.error('Invalid date provided:', date);
       return;
     }
 
-    // Format the date for the API request
-    const formattedDate = dateObj.toISOString().split('T')[0];
-    console.log('Selected date:', formattedDate);
-
-    // Update state
     setCustomDate(dateObj);
     setTimeRange('custom');
     setShowCustomDatePicker(true);
-    
-    // Fetch data with the new date
-    try {
-      const url = `http://localhost:5001/api/admin/sales/custom?date=${formattedDate}&_t=${Date.now()}`;
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('Sales data received for date:', formattedDate, data);
-
-      if (data.custom) {
-        setSales(data.custom);
-      }
-    } catch (error) {
-      console.error('Error fetching sales data:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to fetch sales data',
-        severity: 'error'
-      });
-    }
+    await fetchAdminSales('custom', selectedWaiter, dateObj);
   };
 
   // Add pagination handler
@@ -1173,50 +1121,50 @@ export default function AdminDashboard() {
         {/* Filter controls at the top */}
         <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
           <FormControl sx={{ minWidth: 160 }} size="small">
-            <InputLabel>Time Range</InputLabel>
-            <Select
-              value={timeRange}
-              onChange={handleTimeRangeChange}
-              label="Time Range"
-              disabled={loading}
-            >
-              <MenuItem value="daily">Today</MenuItem>
-              <MenuItem value="weekly">Last 7 Days</MenuItem>
-              <MenuItem value="monthly">Last 30 Days</MenuItem>
-              <MenuItem value="yearly">Last 365 Days</MenuItem>
-              <MenuItem value="custom">Custom Date</MenuItem>
-            </Select>
-          </FormControl>
-          {showCustomDatePicker && (
-            <LocalizationProvider dateAdapter={AdapterDateFns}>
-              <DatePicker
-                label="Select Date"
-                value={customDate}
-                onChange={handleCustomDateChange}
-                slotProps={{ textField: { size: 'small' } }}
-                maxDate={new Date()}
-                format="yyyy-MM-dd"
-              />
-            </LocalizationProvider>
-          )}
+              <InputLabel>Time Range</InputLabel>
+              <Select
+                value={timeRange}
+                onChange={handleTimeRangeChange}
+                label="Time Range"
+                disabled={loading}
+              >
+                <MenuItem value="daily">Today</MenuItem>
+                <MenuItem value="weekly">Last 7 Days</MenuItem>
+                <MenuItem value="monthly">Last 30 Days</MenuItem>
+                <MenuItem value="yearly">Last 365 Days</MenuItem>
+                <MenuItem value="custom">Custom Date</MenuItem>
+              </Select>
+            </FormControl>
+            {showCustomDatePicker && (
+              <LocalizationProvider dateAdapter={AdapterDateFns}>
+                <DatePicker
+                  label="Select Date"
+                  value={customDate}
+                  onChange={handleCustomDateChange}
+                  slotProps={{ textField: { size: 'small' } }}
+                  maxDate={new Date()}
+                  format="yyyy-MM-dd"
+                />
+              </LocalizationProvider>
+            )}
           <FormControl sx={{ minWidth: 160 }} size="small">
             <InputLabel>Waiter</InputLabel>
             <Select value={selectedWaiter} onChange={handleWaiterFilter} label="Waiter">
-              <MenuItem value="all">All Waiters</MenuItem>
+                <MenuItem value="all">All Waiters</MenuItem>
               {waiters.map(waiter => (
                 <MenuItem key={waiter.id} value={waiter.id}>{waiter.username}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <Button
-            variant="contained"
-            startIcon={<RefreshIcon />}
+                ))}
+              </Select>
+            </FormControl>
+                <Button 
+                  variant="contained" 
+                  startIcon={<RefreshIcon />}
             onClick={handleRefreshSales}
             disabled={loading}
-          >
+                >
             Refresh
-          </Button>
-        </Box>
+                </Button>
+              </Box>
         {/* Simple summary boxes (not table) */}
         {renderSummaryBoxes(salesStats, false)}
         {renderSalesRanking()}

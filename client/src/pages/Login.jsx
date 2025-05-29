@@ -4,8 +4,8 @@ import { useDispatch } from 'react-redux';
 import { setCredentials } from '../store/slices/authSlice';
 import { userOperations } from '../services/db';
 import { getUserByPhone, saveUserForOffline, initializeOfflineFunctionality, getUserByUsername } from '../services/offlineService';
-import axios from 'axios';
-import { API_ENDPOINTS } from '../config/api';
+import axios from '../services/axiosConfig';
+import socketService from '../services/socketService';
 import {
   Container,
   Card,
@@ -48,16 +48,6 @@ const Login = () => {
   const dispatch = useDispatch();
 
   useEffect(() => {
-    const initializeOffline = async () => {
-      try {
-        console.log('Initializing offline functionality in Login component...');
-        await initializeOfflineFunctionality();
-        console.log('Offline functionality initialized successfully in Login component');
-      } catch (error) {
-        console.error('Failed to initialize offline functionality in Login component:', error);
-      }
-    };
-
     const handleOnlineStatus = () => {
       const online = navigator.onLine;
       setNetworkStatus(online ? 'online' : 'offline');
@@ -70,14 +60,14 @@ const Login = () => {
       }
     };
     
-    // Initialize offline functionality
-    initializeOffline();
+    // Initialize offline functionality once
+    initializeOfflineFunctionality().catch(error => {
+      console.error('Failed to initialize offline functionality:', error);
+    });
     
-    // Set up online/offline event listeners
     window.addEventListener('online', handleOnlineStatus);
     window.addEventListener('offline', handleOnlineStatus);
     
-    // Initial status check
     handleOnlineStatus();
     
     return () => {
@@ -94,159 +84,150 @@ const Login = () => {
     setPhoneNumber('');
   };
 
+  const handleSuccessfulLogin = async (user, token, isOfflineLogin = false) => {
+    try {
+      // Save to localStorage
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(user));
+      
+      // Update Redux store
+      dispatch(setCredentials({ user, token }));
+
+      // Initialize socket connection if online
+      if (!isOfflineLogin) {
+        try {
+          await socketService.connect(token);
+        } catch (error) {
+          console.error('Socket connection error:', error);
+          // Continue with login even if socket fails
+        }
+      }
+
+      // Navigate based on role
+      const role = user.role.toLowerCase();
+      const targetPath = role === 'cashier' ? '/cashier/dashboard' : `/${role}/dashboard`;
+      console.log('Navigating to:', targetPath);
+      navigate(targetPath);
+    } catch (error) {
+      console.error('Error in post-login process:', error);
+      throw error;
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      // Ensure offline functionality is initialized
-      await initializeOfflineFunctionality();
-
       if (isOffline) {
         if (activeTab === 0) {
-          // Admin/Staff offline login
           console.log('Attempting admin offline login with username:', username);
           const user = await getUserByUsername(username.trim());
-          console.log('Found user in offline cache:', user);
-          
           if (!user) {
-            setError('User not found in offline cache');
-            setLoading(false);
-            return;
+            throw new Error('User not found in offline cache');
           }
           
-          // Verify password
           if (user.password !== password) {
-            setError('Invalid password');
-            setLoading(false);
-            return;
+            throw new Error('Invalid password');
           }
 
-          // Store user data and token
           localStorage.setItem('user', JSON.stringify(user));
-          localStorage.setItem('token', `offline_${Date.now()}`);
+          const offlineToken = `offline_${Date.now()}`;
+          localStorage.setItem('token', offlineToken);
+          
           dispatch(setCredentials({
-            user: user,
-            token: `offline_${Date.now()}`
+            user,
+            token: offlineToken
           }));
 
-          // Navigate based on role
           navigate(`/${user.role.toLowerCase()}/dashboard`);
         } else {
-          // Cashier offline login
           console.log('Attempting cashier offline login with phone:', phoneNumber);
           const user = await getUserByPhone(phoneNumber.trim());
-          console.log('Found user in offline cache:', user);
-          
           if (!user) {
-            setError('Cashier not found in offline cache');
-            setLoading(false);
-            return;
+            throw new Error('Cashier not found in offline cache');
           }
 
-          // Verify password
           if (user.password !== password) {
-            setError('Invalid password');
-            setLoading(false);
-            return;
+            throw new Error('Invalid password');
           }
 
-          // Store user data and token
           localStorage.setItem('user', JSON.stringify(user));
-          localStorage.setItem('token', `offline_${Date.now()}`);
+          const offlineToken = `offline_${Date.now()}`;
+          localStorage.setItem('token', offlineToken);
+          
           dispatch(setCredentials({
-            user: user,
-            token: `offline_${Date.now()}`
+            user,
+            token: offlineToken
           }));
 
           navigate('/cashier/dashboard');
         }
       } else {
-        // Online login
         let response;
-        if (activeTab === 0) {
-          // Admin/Staff online login
-          console.log('Attempting admin online login with username:', username);
-          response = await axios.post('http://localhost:5001/api/auth/login', {
-            username: username.trim(),
-            password
-          });
-        } else {
-          // Cashier online login
-          console.log('Attempting cashier online login with phone:', phoneNumber);
-          response = await axios.post('http://localhost:5001/api/auth/login', {
-            phone_number: phoneNumber.trim(),
-            password
-          });
-        }
-        
-        if (response.data.token) {
+        const loginData = activeTab === 0 
+          ? { username: username.trim(), password }
+          : { phone_number: phoneNumber.trim(), password };
+
+        console.log('Sending login request with data:', {
+          ...loginData,
+          password: '(hidden)'
+        });
+
+        try {
+          response = await axios.post('/api/auth/login', loginData);
+          console.log('Login response:', response.data);
+
+          if (!response.data?.token || !response.data?.user) {
+            throw new Error('Invalid response from server: missing token or user data');
+          }
+
           const userData = {
             ...response.data.user,
-            password, // Store password for offline login
+            password,
             phone_number: activeTab === 1 ? phoneNumber.trim() : response.data.user.phone_number,
           };
-          
-          console.log('Saving user data for offline access:', userData);
-          
-          // Save to IndexedDB and localStorage in parallel
+
+          // Save user data for offline access
           try {
             await saveUserForOffline(userData);
-            console.log('User data saved successfully for offline access');
-            
-            // Verify the data was saved
-            if (activeTab === 1) {
-              const savedUser = await getUserByPhone(phoneNumber.trim());
-              console.log('Verified saved cashier data:', savedUser);
-              if (!savedUser) {
-                console.warn('Failed to verify saved cashier data');
-              }
-            }
-            
-            // Store token and user data
-            localStorage.setItem('token', response.data.token);
-            localStorage.setItem('user', JSON.stringify(response.data.user));
+            console.log('User data saved for offline access');
+          } catch (saveError) {
+            console.error('Failed to save offline data:', saveError);
+            // Continue with login even if offline save fails
+          }
+
+          localStorage.setItem('token', response.data.token);
+          localStorage.setItem('user', JSON.stringify(response.data.user));
           
-          // Update Redux store
           dispatch(setCredentials({
             user: response.data.user,
             token: response.data.token
           }));
+
+          const targetPath = activeTab === 0 
+            ? `/${response.data.user.role.toLowerCase()}/dashboard`
+            : '/cashier/dashboard';
           
-          // Navigate to appropriate dashboard
-          if (activeTab === 0) {
-            navigate(`/${response.data.user.role.toLowerCase()}/dashboard`);
+          navigate(targetPath);
+        } catch (apiError) {
+          console.error('API request failed:', apiError);
+          if (apiError.response?.status === 403) {
+            localStorage.removeItem('token');
+            throw new Error('Access denied. Please try again.');
+          } else if (apiError.response?.status === 401) {
+            throw new Error('Invalid credentials');
+          } else if (!apiError.response) {
+            throw new Error('No response from server. Please check your connection.');
           } else {
-            navigate('/cashier/dashboard');
-            }
-          } catch (saveError) {
-            console.error('Error saving user data for offline access:', saveError);
-            // Continue with login even if saving fails
-            localStorage.setItem('token', response.data.token);
-            localStorage.setItem('user', JSON.stringify(response.data.user));
-            
-            dispatch(setCredentials({
-              user: response.data.user,
-              token: response.data.token
-            }));
-            
-            if (activeTab === 0) {
-              navigate(`/${response.data.user.role.toLowerCase()}/dashboard`);
-            } else {
-              navigate('/cashier/dashboard');
-            }
+            throw new Error(apiError.response.data?.message || 'Server error occurred');
           }
         }
       }
     } catch (error) {
       console.error('Login error:', error);
-      if (error.response?.status === 403) {
-        localStorage.removeItem('token');
-        navigate('/login');
-      } else {
-        setError(error.response?.data?.message || error.message || 'Login failed. Please try again.');
-      }
+      setError(error.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -300,7 +281,6 @@ const Login = () => {
             background: '#fff',
           }}
         >
-          {/* System name only, no logo */}
           <Typography variant="h5" fontWeight={700} color="#222" letterSpacing={1} sx={{ mb: 2 }}>
             Restaurant POS System
           </Typography>
@@ -327,6 +307,7 @@ const Login = () => {
                 onChange={e => setUsername(e.target.value)}
                 required
                 autoFocus
+                disabled={loading}
               />
             )}
             {activeTab === 1 && (
@@ -339,6 +320,7 @@ const Login = () => {
                 onChange={e => setPhoneNumber(e.target.value)}
                 required
                 autoFocus
+                disabled={loading}
               />
             )}
             <TextField
@@ -350,8 +332,13 @@ const Login = () => {
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
+              disabled={loading}
             />
-            {error && <Typography color="error" align="center" sx={{ mt: 1 }}>{error}</Typography>}
+            {error && (
+              <Alert severity="error" sx={{ mt: 2 }}>
+                {error}
+              </Alert>
+            )}
             <Button
               type="submit"
               variant="contained"
@@ -366,7 +353,11 @@ const Login = () => {
               }}
               disabled={loading}
             >
-              {loading ? 'Logging in...' : 'Login'}
+              {loading ? (
+                <CircularProgress size={24} color="inherit" />
+              ) : (
+                'Login'
+              )}
             </Button>
           </Box>
           <Button
@@ -380,31 +371,30 @@ const Login = () => {
               borderRadius: 2,
               fontWeight: 600,
             }}
+            disabled={loading}
           >
             Continue as Waiter
           </Button>
-          {showOfflineDialog && (
-            <Dialog
-              open={showOfflineDialog}
-              onClose={handleContinueOffline}
-              aria-labelledby="offline-dialog-title"
-            >
-              <DialogTitle id="offline-dialog-title">You are offline</DialogTitle>
-              <DialogContent>
-                <DialogContentText>
-                  Would you like to continue in offline mode or try to reconnect?
-                </DialogContentText>
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={handleContinueOffline} color="primary">
-                  Continue Offline
-                </Button>
-                <Button onClick={handleGoOnline} color="primary">
-                  Try to Reconnect
-                </Button>
-              </DialogActions>
-            </Dialog>
-          )}
+          <Dialog
+            open={showOfflineDialog}
+            onClose={handleContinueOffline}
+            aria-labelledby="offline-dialog-title"
+          >
+            <DialogTitle id="offline-dialog-title">You are offline</DialogTitle>
+            <DialogContent>
+              <DialogContentText>
+                Would you like to continue in offline mode or try to reconnect?
+              </DialogContentText>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleContinueOffline} color="primary">
+                Continue Offline
+              </Button>
+              <Button onClick={handleGoOnline} color="primary">
+                Try to Reconnect
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Paper>
       </Container>
       <Footer />
