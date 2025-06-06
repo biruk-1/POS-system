@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { logout } from '../store/slices/authSlice';
@@ -37,7 +37,7 @@ import {
 
 const drawerWidth = 280;
 
-export default function CashierLayout() {
+const CashierLayout = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -309,4 +309,6 @@ export default function CashierLayout() {
       </Box>
     </Box>
   );
-} 
+};
+
+export default CashierLayout; 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import axios from 'axios';
 import io from 'socket.io-client';
+import API_ENDPOINTS from '../../config/api';
 import {
   Box,
   Typography,
@@ -86,36 +87,47 @@ export default function CashierSales() {
   useEffect(() => {
     const socket = io('http://localhost:5001', {
       withCredentials: true,
-      transports: ['websocket'],
-      auth: {
-        token
-      },
-      extraHeaders: {
-        'Access-Control-Allow-Origin': 'http://localhost:5173'
-      }
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+      auth: { token }
     });
     
     socket.on('connect', () => {
       console.log('Cashier Sales connected to socket server');
+      socket.emit('authenticate', token); // Emit authenticate event
+      setSnackbar({
+        open: true,
+        message: 'Connected to real-time updates',
+        severity: 'success'
+      });
     });
     
     socket.on('connect_error', (error) => {
       console.error('Socket connection error:', error);
       setSnackbar({
         open: true,
-        message: 'Failed to connect to real-time updates server',
+        message: 'Failed to connect to real-time updates server. Retrying...',
         severity: 'error'
+      });
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Socket disconnected:', reason);
+      setSnackbar({
+        open: true,
+        message: 'Disconnected from real-time updates. Reconnecting...',
+        severity: 'warning'
       });
     });
     
     // Listen for order status updates to refresh the data
     socket.on('order_status_updated', (updatedOrder) => {
       if (updatedOrder.status === 'completed' || updatedOrder.status === 'paid') {
-        console.log('Order status updated, refreshing sales data');
-        // Always refresh data regardless of date to ensure consistency with admin dashboard
+        console.log('Order status updated, refreshing sales data:', updatedOrder);
         fetchSalesData();
-        
-        // Show notification to cashier
         setSnackbar({
           open: true,
           message: `Order #${updatedOrder.id} ${updatedOrder.status} - sales updated`,
@@ -133,11 +145,11 @@ export default function CashierSales() {
     return () => {
       socket.disconnect();
     };
-  }, [selectedDate, selectedWaiter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedDate, selectedWaiter]);
 
   const fetchWaiters = async () => {
     try {
-      const response = await axios.get('http://localhost:5001/api/waiters', {
+      const response = await axios.get(API_ENDPOINTS.WAITERS, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setWaiters(response.data);
@@ -177,7 +189,7 @@ export default function CashierSales() {
         userId: user?.id
       });
       
-      const response = await axios.get('http://localhost:5001/api/sales/daily', {
+      const response = await axios.get(API_ENDPOINTS.SALES_DAILY, {
         headers: { 
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

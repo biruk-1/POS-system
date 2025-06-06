@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
-import axios from 'axios';
 import io from 'socket.io-client';
+import env from '../../config/env';
 import {
   Box,
   Grid,
@@ -55,25 +55,19 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { useNavigate } from 'react-router-dom';
 import Footer from '../../components/Footer';
-
-// Add API URL constant
-const API_URL = 'http://localhost:5001/api';
+import { API_ENDPOINTS } from '../../config/api';
+import axiosInstance from '../../services/axiosConfig';
 
 // Add fetchOrdersData helper function
-const fetchOrdersData = async (token) => {
+const fetchOrdersData = async () => {
   try {
     // First get all orders
-    const response = await axios.get('http://localhost:5001/api/orders', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    const response = await axiosInstance.get('/orders');
     
     // For each order, fetch its items
     const ordersWithItems = await Promise.all(response.data.map(async (order) => {
       try {
-        const detailedOrder = await fetchOrderWithItems(order.id, token);
+        const detailedOrder = await fetchOrderWithItems(order.id);
         return {
           ...detailedOrder,
           items: Array.isArray(detailedOrder.items) ? detailedOrder.items : []
@@ -95,14 +89,9 @@ const fetchOrdersData = async (token) => {
 };
 
 // Add fetchWaitersData helper function
-const fetchWaitersData = async (token) => {
+const fetchWaitersData = async () => {
   try {
-    const response = await axios.get('http://localhost:5001/api/waiters', {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    const response = await axiosInstance.get('/users?role=waiter');
     return response.data;
   } catch (error) {
     console.error('Error fetching waiters:', error);
@@ -111,28 +100,18 @@ const fetchWaitersData = async (token) => {
 };
 
 // Helper to always fetch order with items
-const fetchOrderWithItems = async (orderId, token) => {
+const fetchOrderWithItems = async (orderId) => {
   try {
     console.log('Fetching order details for order:', orderId);
     // First get the order details
-  const response = await axios.get(`http://localhost:5001/api/orders/${orderId}`, {
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    }
-  });
-  let order = response.data;
+    const response = await axiosInstance.get(`/orders/${orderId}`);
+    let order = response.data;
     console.log('Initial order data:', order);
 
     // Then get the order items
     try {
       console.log('Fetching items for order:', orderId);
-    const itemsRes = await axios.get(`http://localhost:5001/api/orders/${orderId}/items`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
+      const itemsRes = await axiosInstance.get(`/orders/${orderId}/items`);
       console.log('Items response:', itemsRes.data);
       
       // Process the items and ensure all necessary fields
@@ -166,14 +145,13 @@ const fetchOrderWithItems = async (orderId, token) => {
       };
       
       console.log('Final order data with items:', order);
-  return order;
-    } catch (itemsError) {
-      console.error('Error fetching order items:', itemsError);
-      // If items fetch fails, return order with empty items array
-      return { ...order, items: [], total_amount: 0, item_count: 0 };
+      return order;
+    } catch (error) {
+      console.error(`Error fetching items for order ${orderId}:`, error);
+      return order;
     }
   } catch (error) {
-    console.error('Error fetching order:', error);
+    console.error(`Error fetching order ${orderId}:`, error);
     throw error;
   }
 };
@@ -223,102 +201,107 @@ export default function AdminDashboard() {
 
   const [isConnected, setIsConnected] = useState(true);
 
-  // Add fetchOrders function
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const response = await axiosInstance.get('/dashboard/cashier');
+      setDashboardData(response.data);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+      if (error.response?.status === 401) {
+        // Token is invalid or expired
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.message || 'Error fetching dashboard data',
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const fetchOrders = async () => {
-    setLoading(true);
-    const data = await fetchOrdersData(token);
-    // Filter out orders with no items
-    const nonEmptyOrders = data.filter(order => order.items && order.items.length > 0);
-    setOrders(nonEmptyOrders);
-    setFilteredOrders(nonEmptyOrders);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const response = await axiosInstance.get('/orders');
+      const data = response.data;
+      // Filter out orders with no items
+      const filteredOrders = data.filter(order => order.items && order.items.length > 0);
+      setOrders(filteredOrders);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      if (error.response?.status === 401) {
+        // Token is invalid or expired
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.message || 'Error fetching orders',
+        severity: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchBillRequests = async () => {
+    try {
+      const response = await axiosInstance.get('/bill-requests');
+      setBillRequests(response.data);
+    } catch (error) {
+      console.error('Error fetching bill requests:', error);
+      if (error.response?.status === 401) {
+        // Token is invalid or expired
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+        return;
+      }
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.message || 'Error fetching bill requests',
+        severity: 'error'
+      });
+    }
   };
 
   // Update socket connection setup
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      console.error('No token found for socket connection');
-      return;
-    }
-
-    // Initialize socket connection with auth token
-    const socket = io('http://localhost:5001', {
+    // Initialize socket connection
+    const newSocket = io(env.SOCKET_URL, {
       auth: { token },
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000
+      transports: ['websocket', 'polling']
     });
 
-    // Connection event handlers
-    socket.on('connect', () => {
-      console.log('Admin connected to socket server');
-      setIsConnected(true);
+    newSocket.on('connect', () => {
+      console.log('Socket connected');
     });
 
-    socket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error.message);
-      setIsConnected(false);
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
     });
 
-    socket.on('connect_timeout', () => {
-      console.error('Socket connection timeout');
-      setIsConnected(false);
+    newSocket.on('disconnect', (reason) => {
+      console.log('Socket disconnected:', reason);
     });
 
-    socket.on('error', (error) => {
-      console.error('Socket error:', error);
-      setIsConnected(false);
-    });
+    setSocket(newSocket);
 
-    socket.on('disconnect', (reason) => {
-      console.log('Admin disconnected from socket server:', reason);
-      setIsConnected(false);
-    });
-
-    socket.on('reconnect', (attemptNumber) => {
-      console.log('Socket reconnected after', attemptNumber, 'attempts');
-      setIsConnected(true);
-    });
-
-    socket.on('reconnect_error', (error) => {
-      console.error('Socket reconnection error:', error);
-      setIsConnected(false);
-    });
-
-    socket.on('reconnect_failed', () => {
-      console.error('Socket reconnection failed');
-      setIsConnected(false);
-    });
-
-    // Business event handlers
-    socket.on('admin_sales_updated', (data) => {
-      console.log('Sales update received:', data);
-      if (data.timeRanges.includes(timeRange)) {
-        refreshAllSalesData();
-      }
-    });
-
-    socket.on('order_updated', (updatedOrder) => {
-      console.log('Order update received:', updatedOrder);
-      handleRefreshOrders();
-    });
-
-    // Cleanup on unmount
     return () => {
-      if (socket) {
-        socket.removeAllListeners();
-        socket.close();
+      if (newSocket) {
+        newSocket.disconnect();
       }
     };
-  }, [timeRange]); // Only reconnect if timeRange changes
+  }, [token]);
 
   // Add fetchWaiters function
   const fetchWaiters = async () => {
-    const data = await fetchWaitersData(token);
+    const data = await fetchWaitersData();
     setWaiters(data);
   };
 
@@ -391,36 +374,29 @@ export default function AdminDashboard() {
   // Completely rewritten fetch sales function for admin
   const fetchAdminSales = async (timeRangeParam = timeRange, waiterId = selectedWaiter, customDateParam = customDate) => {
     try {
-      if (!timeRangeParam) {
-        console.error('No timeRange provided for sales fetch');
-        return;
-      }
-
-      let url = `http://localhost:5001/api/admin/sales/${timeRangeParam}`;
       const params = new URLSearchParams();
-
-      if (waiterId && waiterId !== 'all') {
-        params.append('waiterId', waiterId);
-      }
-
-      // Use 'date' as the query parameter for custom date
-      if (timeRangeParam === 'custom' && customDateParam) {
-        params.append('date', customDateParam.toISOString().split('T')[0]);
-      }
-
-      params.append('_t', Date.now());
-
-      const response = await fetch(`${url}?${params.toString()}`, {
+      params.append('timeRange', timeRangeParam);
+      if (waiterId !== 'all') params.append('waiterId', waiterId);
+      if (customDateParam) params.append('date', customDateParam.toISOString().split('T')[0]);
+      
+      console.log('Fetching sales data with params:', Object.fromEntries(params));
+      
+      const response = await fetch(`${env.API_URL}/api/reports/sales/daily?${params.toString()}`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
         }
       });
-
+      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
+        console.error('Sales data fetch error:', errorData);
+        throw new Error(errorData.error || 'Failed to fetch sales data');
       }
-
+      
       const data = await response.json();
+      console.log('Received sales data:', data);
+      
       setSales({
         totalSales: parseFloat(data.totalSales) || 0,
         completedOrders: parseInt(data.completedOrders) || 0,
@@ -432,9 +408,10 @@ export default function AdminDashboard() {
         })) : []
       });
     } catch (error) {
+      console.error('Error in fetchAdminSales:', error);
       setSnackbar({
         open: true,
-        message: 'Failed to fetch sales data',
+        message: error.message || 'Failed to fetch sales data',
         severity: 'error'
       });
     }
@@ -589,7 +566,7 @@ export default function AdminDashboard() {
       setLoading(true);
       
       // Fetch the detailed order data
-      const detailedOrder = await fetchOrderWithItems(orderId, token);
+      const detailedOrder = await fetchOrderWithItems(orderId);
       console.log('Fetched detailed order data:', detailedOrder);
       
       if (!detailedOrder) {
@@ -688,7 +665,7 @@ export default function AdminDashboard() {
       
       // Make the API request to update the order
       const response = await axios.put(
-        `http://localhost:5001/api/orders/${editedOrder.id}`, 
+        `${env.API_URL}/api/orders/${editedOrder.id}`, 
         updateData,
         {
           headers: {
@@ -741,7 +718,7 @@ export default function AdminDashboard() {
       setLoading(true);
       
       // Make the API request to delete the order
-      await axios.delete(`http://localhost:5001/api/orders/${orderId}`, {
+      await axios.delete(`${env.API_URL}/api/orders/${orderId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

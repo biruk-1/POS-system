@@ -172,46 +172,61 @@ export default function Reports() {
     setSuccess('');
     
     try {
-      console.log('Generating report with parameters:', {
+      const params = {
         reportType,
         startDate: startDate.toISOString().split('T')[0],
         endDate: endDate.toISOString().split('T')[0],
-        detailLevel: 'daily' // Always use daily detail level for the most granular data
-      });
+        detailLevel: 'daily'
+      };
       
-      const response = await axios.post('http://localhost:5001/api/reports/generate', {
-        reportType,
-        startDate: startDate.toISOString().split('T')[0],
-        endDate: endDate.toISOString().split('T')[0],
-        detailLevel: 'daily', // Add detail level parameter for better data
-        _t: new Date().getTime() // Add timestamp to prevent caching issues
-      }, {
+      console.log('Generating report with parameters:', params);
+      
+      const response = await axios.post('http://localhost:5001/api/reports/generate', params, {
         headers: { 
           Authorization: `Bearer ${localStorage.getItem('token')}` 
         }
       });
       
-      if (response.data && response.data.data && Array.isArray(response.data.data) && response.data.data.length > 0) {
-        // Use functional update to ensure we're working with the most recent state
-        setReportData(prevData => {
-          console.log('Updating report data with server response');
-          return response.data.data;
-        });
-        setSuccess('Report generated successfully!');
-      } else if (response.data && Array.isArray(response.data) && response.data.length > 0) {
-        // Backward compatibility with previous API response format
-        setReportData(prevData => {
-          console.log('Updating report data with server response (legacy format)');
-          return response.data;
-        });
+      if (response.data && response.data.data) {
+        setReportData(response.data.data);
       setSuccess('Report generated successfully!');
       } else {
-        // Handle empty data by creating placeholder data for today
-        const today = new Date().toISOString().split('T')[0];
+        throw new Error('Invalid response format from server');
+      }
+    } catch (error) {
+      console.error('Failed to generate report:', error);
+      
+      // Handle specific error cases
+      if (error.response) {
+        // Server responded with an error
+        const errorMessage = error.response.data.error || 'Failed to generate report';
+        const errorDetails = error.response.data.details;
         
+        if (errorDetails) {
+          // Handle validation errors
+          const validationErrors = Object.entries(errorDetails)
+            .filter(([_, value]) => value !== null)
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(', ');
+          
+          setError(`Validation error: ${validationErrors}`);
+        } else {
+          setError(errorMessage);
+        }
+      } else if (error.request) {
+        // Request was made but no response received
+        setError('No response from server. Please check your connection.');
+      } else {
+        // Something else happened
+        setError(error.message || 'An unexpected error occurred');
+      }
+      
+      // Set placeholder data based on report type
+        const today = new Date().toISOString().split('T')[0];
         let placeholderData = [];
         
-        if (reportType === 'sales') {
+      switch (reportType) {
+        case 'sales':
           placeholderData = [{
             id: 1,
             date: today,
@@ -220,88 +235,30 @@ export default function Reports() {
             avgOrder: 0,
             topItem: 'N/A'
           }];
-        } else if (reportType === 'items') {
+          break;
+        case 'items':
           placeholderData = [{
             id: 1,
-            date: today,
-            count: 0,
-            revenue: 0
+            name: 'No items found',
+            quantity: 0,
+            total_sales: 0,
+            order_count: 0
           }];
-        } else if (reportType === 'drinks') {
+          break;
+        case 'drinks':
           placeholderData = [{
             id: 1,
-            date: today,
-            count: 0,
-            revenue: 0
+            name: 'No drinks found',
+            quantity: 0,
+            total_sales: 0,
+            order_count: 0
           }];
-        } else if (reportType === 'staff') {
-          placeholderData = [{
-            id: 1,
-            staff: 'No staff data',
-            role: 'N/A',
-            orders: 0, 
-            revenue: 0
-          }];
-        }
-        
-        // Use functional update
-        setReportData(prevData => {
-          console.log('Setting placeholder data due to empty response');
-          return placeholderData;
-        });
-        setSuccess('No data available for the selected period. Showing default values.');
-      }
-    } catch (err) {
-      console.error('Failed to generate report:', err);
-      
-      // More descriptive error message based on error type
-      if (err.response) {
-        // The server responded with an error status code
-        setError(`Server error: ${err.response.data?.error || err.response.statusText || 'Unknown error'}`);
-      } else if (err.request) {
-        // The request was made but no response was received
-        setError('Failed to connect to the server. Please check your connection.');
-      } else {
-        // Something happened in setting up the request
-        setError(`Failed to generate report: ${err.message}`);
+          break;
+        default:
+          placeholderData = [];
       }
       
-      // Create placeholder data on error too
-      const today = new Date().toISOString().split('T')[0];
-        
-      let placeholderData = [];
-      
-      if (reportType === 'sales') {
-        placeholderData = [{
-          id: 1,
-          date: today,
-          orders: 0,
-          revenue: 0,
-          avgOrder: 0,
-          topItem: 'N/A'
-        }];
-      } else if (reportType === 'items' || reportType === 'drinks') {
-        placeholderData = [{
-          id: 1,
-          date: today,
-          count: 0,
-          revenue: 0
-        }];
-      } else if (reportType === 'staff') {
-        placeholderData = [{
-          id: 1,
-          staff: 'No staff data',
-          role: 'N/A',
-          orders: 0, 
-          revenue: 0
-        }];
-      }
-      
-      // Use functional update
-      setReportData(prevData => {
-        console.log('Setting placeholder data due to error');
-        return placeholderData;
-      });
+      setReportData(placeholderData);
     } finally {
       setLoading(false);
     }

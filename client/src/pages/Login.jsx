@@ -24,7 +24,8 @@ import {
   DialogActions,
   Alert,
   Paper,
-  CircularProgress
+  CircularProgress,
+  Snackbar
 } from '@mui/material';
 import {
   Person as PersonIcon,
@@ -32,6 +33,7 @@ import {
   Restaurant as RestaurantIcon
 } from '@mui/icons-material';
 import Footer from '../components/Footer';
+import { API_ENDPOINTS } from '../config/api';
 
 const Login = () => {
   const [activeTab, setActiveTab] = useState(0);
@@ -86,6 +88,10 @@ const Login = () => {
 
   const handleSuccessfulLogin = async (user, token, isOfflineLogin = false) => {
     try {
+      // Clear any existing tokens first
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      
       // Save to localStorage
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify(user));
@@ -96,6 +102,9 @@ const Login = () => {
       // Initialize socket connection if online
       if (!isOfflineLogin) {
         try {
+          // Disconnect any existing socket connection
+          socketService.disconnect();
+          // Connect with new token
           await socketService.connect(token);
         } catch (error) {
           console.error('Socket connection error:', error);
@@ -114,7 +123,7 @@ const Login = () => {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -132,102 +141,54 @@ const Login = () => {
             throw new Error('Invalid password');
           }
 
-          localStorage.setItem('user', JSON.stringify(user));
-          const offlineToken = `offline_${Date.now()}`;
-          localStorage.setItem('token', offlineToken);
-          
-          dispatch(setCredentials({
-            user,
-            token: offlineToken
-          }));
-
-          navigate(`/${user.role.toLowerCase()}/dashboard`);
+          await handleSuccessfulLogin(user, `offline_${Date.now()}`, true);
         } else {
           console.log('Attempting cashier offline login with phone:', phoneNumber);
           const user = await getUserByPhone(phoneNumber.trim());
           if (!user) {
             throw new Error('Cashier not found in offline cache');
           }
-
-          if (user.password !== password) {
-            throw new Error('Invalid password');
-          }
-
-          localStorage.setItem('user', JSON.stringify(user));
-          const offlineToken = `offline_${Date.now()}`;
-          localStorage.setItem('token', offlineToken);
-          
-          dispatch(setCredentials({
-            user,
-            token: offlineToken
-          }));
-
-          navigate('/cashier/dashboard');
+          await handleSuccessfulLogin(user, `offline_${Date.now()}`, true);
         }
       } else {
-        let response;
+        // Prepare login data based on active tab
         const loginData = activeTab === 0 
           ? { username: username.trim(), password }
           : { phone_number: phoneNumber.trim(), password };
 
-        console.log('Sending login request with data:', {
+        console.log('Attempting login with:', {
           ...loginData,
           password: '(hidden)'
         });
 
-        try {
-          response = await axios.post('/api/auth/login', loginData);
-          console.log('Login response:', response.data);
+        const response = await fetch(API_ENDPOINTS.LOGIN, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(loginData),
+        });
 
-          if (!response.data?.token || !response.data?.user) {
-            throw new Error('Invalid response from server: missing token or user data');
-          }
+        const data = await response.json();
 
-          const userData = {
-            ...response.data.user,
-            password,
-            phone_number: activeTab === 1 ? phoneNumber.trim() : response.data.user.phone_number,
-          };
-
-          // Save user data for offline access
-          try {
-            await saveUserForOffline(userData);
-            console.log('User data saved for offline access');
-          } catch (saveError) {
-            console.error('Failed to save offline data:', saveError);
-            // Continue with login even if offline save fails
-          }
-
-          localStorage.setItem('token', response.data.token);
-          localStorage.setItem('user', JSON.stringify(response.data.user));
-          
-          dispatch(setCredentials({
-            user: response.data.user,
-            token: response.data.token
-          }));
-
-          const targetPath = activeTab === 0 
-            ? `/${response.data.user.role.toLowerCase()}/dashboard`
-            : '/cashier/dashboard';
-          
-          navigate(targetPath);
-        } catch (apiError) {
-          console.error('API request failed:', apiError);
-          if (apiError.response?.status === 403) {
-            localStorage.removeItem('token');
-            throw new Error('Access denied. Please try again.');
-          } else if (apiError.response?.status === 401) {
-            throw new Error('Invalid credentials');
-          } else if (!apiError.response) {
-            throw new Error('No response from server. Please check your connection.');
-          } else {
-            throw new Error(apiError.response.data?.message || 'Server error occurred');
-          }
+        if (!response.ok) {
+          throw new Error(data.error || 'Login failed');
         }
+
+        // Save user data for offline access
+        try {
+          await saveUserForOffline(data.user);
+        } catch (offlineError) {
+          console.error('Failed to save offline data:', offlineError);
+          // Continue with login even if offline save fails
+        }
+
+        // Handle successful login
+        await handleSuccessfulLogin(data.user, data.token);
       }
-    } catch (error) {
-      console.error('Login error:', error);
-      setError(error.message || 'Login failed. Please try again.');
+    } catch (err) {
+      console.error('Login error:', err);
+      setError(err.message || 'Failed to login. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -296,7 +257,7 @@ const Login = () => {
             <Tab icon={<PersonIcon />} label="Staff Login" />
             <Tab icon={<PhoneIcon />} label="Cashier Login" />
           </Tabs>
-          <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1, width: '100%' }}>
+          <Box component="form" onSubmit={handleLogin} sx={{ mt: 1, width: '100%' }}>
             {activeTab === 0 && (
               <TextField
                 label="Username"

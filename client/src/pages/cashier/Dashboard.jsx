@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import axios from 'axios';
+import axios from '../../services/axiosConfig';
 import io from 'socket.io-client';
 import {
   Grid,
@@ -65,7 +65,17 @@ import {
   AccessTime as AccessTimeIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
-import * as offlineService from '../../services/offlineService';
+import { 
+  saveDashboardDataOffline as saveOfflineDashboardData,
+  getOfflineDashboardData,
+  saveOrderOffline as saveOfflineOrders,
+  getOfflineOrders,
+  saveBillRequestOffline as saveOfflineBillRequests,
+  getOfflineBillRequests,
+  syncWithServer,
+  initOfflineListeners,
+  saveOrderOffline
+} from '../../services/offlineService';
 import socketService from '../../services/socketService';
 import Footer from '../../components/Footer';
 
@@ -106,6 +116,7 @@ export default function CashierDashboard() {
   const [filteredOrders, setFilteredOrders] = useState([]);
   const [customDate, setCustomDate] = useState('');
   const [availableDates, setAvailableDates] = useState([]);
+  const [error, setError] = useState(null);
 
   const isSameDay = (date1, date2) => {
     const d1 = new Date(date1);
@@ -116,11 +127,16 @@ export default function CashierDashboard() {
   };
 
   const getAvailableDates = (ordersData) => {
+    if (!Array.isArray(ordersData)) {
+      console.warn('getAvailableDates received non-array data:', ordersData);
+      return [];
+    }
+
     const dates = {};
     const result = [];
     
     ordersData.forEach(order => {
-      if (order.created_at) {
+      if (order?.created_at) {
         try {
           const date = new Date(order.created_at);
           const dateString = date.toISOString().split('T')[0];
@@ -147,7 +163,6 @@ export default function CashierDashboard() {
     
     Object.values(dates).forEach(item => result.push(item));
     result.sort((a, b) => new Date(b.date) - new Date(a.date));
-    console.log('Available dates from orders:', result);
     return result;
   };
   
@@ -161,34 +176,59 @@ export default function CashierDashboard() {
   useEffect(() => {
     const handleOnline = async () => {
       setIsOffline(false);
-      setSyncStatus('Connected');
-      
+      setSyncStatus({ syncing: true, message: 'Syncing data...' });
       try {
-        await offlineService.syncWithServer();
-        setSyncStatus('Data synchronized successfully');
+        const result = await syncWithServer();
+        setSyncStatus({ syncing: false, message: result.success ? `Sync complete: ${result.message}` : `Sync failed: ${result.message}` });
         fetchDashboardData();
         fetchOrders();
         fetchBillRequests();
       } catch (error) {
         console.error('Error syncing offline data:', error);
-        setSyncStatus('Error syncing data. Will retry automatically.');
+        setSyncStatus({ syncing: false, message: 'Error syncing data. Will retry automatically.' });
       }
     };
     
-    const handleOffline = () => {
+    const handleOffline = async () => {
       setIsOffline(true);
       setSyncStatus({ syncing: false, message: 'Working offline. Changes will sync when reconnected.' });
-      fetchOfflineData();
+      try {
+        const [offlineDashboardData, offlineOrders, offlineBillRequests] = await Promise.all([
+          getOfflineDashboardData(),
+          getOfflineOrders(),
+          getOfflineBillRequests()
+        ]);
+
+        if (offlineDashboardData) {
+          setData(offlineDashboardData);
+        }
+        if (offlineOrders) {
+          setOrders(offlineOrders);
+          const dates = getAvailableDates(offlineOrders);
+          setAvailableDates(dates);
+        }
+        if (offlineBillRequests) {
+          setBillRequests(offlineBillRequests);
+          setNotificationCount(offlineBillRequests.length);
+        }
+      } catch (error) {
+        console.error('Error loading offline data:', error);
+        setSnackbar({
+          open: true,
+          message: 'Error loading offline data',
+          severity: 'error'
+        });
+      }
     };
     
-    const cleanup = offlineService.initOfflineListeners(handleOnline, handleOffline);
+    const cleanup = initOfflineListeners(handleOnline, handleOffline);
     return cleanup;
   }, [token]);
 
   const syncOfflineData = async () => {
     if (navigator.onLine) {
       try {
-        const result = await offlineService.syncWithServer();
+        const result = await socketService.syncWithServer();
         setSyncStatus({ syncing: false, message: result.success ? `Sync complete: ${result.message}` : `Sync failed: ${result.message}` });
         fetchDashboardData();
         fetchOrders();
@@ -207,150 +247,137 @@ export default function CashierDashboard() {
   };
 
   const fetchDashboardData = async () => {
-      try {
-        setLoading(true);
-      let dashboardData;
-      
-      if (navigator.onLine) {
-        try {
-        const response = await axios.get('http://localhost:5001/api/dashboard/cashier', {
-            headers: { Authorization: `Bearer ${token}` }
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await axios.get('/dashboard/cashier');
+      if (response.data) {
+        setData(response.data);
+        await saveOfflineDashboardData(response.data);
+      }
+    } catch (err) {
+      console.error('Error fetching dashboard data:', err);
+      setError('Failed to load dashboard data');
+      const offlineData = await getOfflineDashboardData();
+      if (offlineData) {
+        setData(offlineData);
+        setSnackbar({
+          open: true,
+          message: 'Using offline data',
+          severity: 'warning'
         });
-          dashboardData = response.data;
-          
-          // Cache dashboard data for offline use
-          await offlineService.saveDashboardDataOffline(dashboardData);
-        } catch (apiError) {
-          console.error('API Error:', apiError);
-          // On API error, try to load from offline storage
-          dashboardData = await offlineService.getOfflineDashboardData();
-          if (!dashboardData) {
-            throw new Error('Failed to load dashboard data from both API and offline storage');
-          }
-        }
-      } else {
-        // Load from offline storage
-        dashboardData = await offlineService.getOfflineDashboardData();
-        if (!dashboardData) {
-          throw new Error('No offline dashboard data available');
-        }
       }
-      
-      setData(dashboardData);
-      } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      setSnackbar({
-        open: true,
-        message: error.message || 'Failed to load dashboard data',
-        severity: 'error'
-      });
     } finally {
-        setLoading(false);
-      }
-    };
+      setLoading(false);
+    }
+  };
 
   const fetchOrders = async () => {
     try {
-      let ordersData;
-
-      if (navigator.onLine) {
-        try {
-          const response = await axios.get('http://localhost:5001/api/orders', {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          ordersData = response.data;
-    
-          // Cache orders for offline use
-          await Promise.all(ordersData.map(order => 
-            offlineService.saveOrderOffline(order).catch(error => 
-              console.error(`Error caching order ${order.id}:`, error)
-            )
-          ));
-        } catch (apiError) {
-          console.error('API Error:', apiError);
-          // On API error, try to load from offline storage
-          ordersData = await offlineService.getOfflineOrders();
-          if (!ordersData || !ordersData.length) {
-            throw new Error('Failed to load orders from both API and offline storage');
-          }
-        }
-      } else {
-        // Load from offline storage
-        ordersData = await offlineService.getOfflineOrders();
-        if (!ordersData || !ordersData.length) {
-          throw new Error('No offline orders available');
-        }
+      setLoading(true);
+      setError(null);
+      const response = await axios.get('/orders');
+      if (response.data) {
+        setOrders(response.data);
+        await saveOfflineOrders(response.data);
       }
-
-      // Sort orders by date (newest first) and update state
-      ordersData.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      setOrders(ordersData);
-
-      // Update available dates
-      const dates = getAvailableDates(ordersData);
-      setAvailableDates(dates);
-
-      // Apply date filtering
-      if (dateFilter === 'all') {
-        setFilteredOrders(ordersData);
-      } else {
-        const filtered = ordersData.filter(order => {
-          const orderDate = new Date(order.created_at).toISOString().split('T')[0];
-          return orderDate === dateFilter;
-      });
-        setFilteredOrders(filtered);
+    } catch (err) {
+      console.error('Error fetching orders:', err);
+      setError('Failed to load orders');
+      const offlineOrders = await getOfflineOrders();
+      if (offlineOrders) {
+        setOrders(offlineOrders);
+        const dates = getAvailableDates(offlineOrders);
+        setAvailableDates(dates);
+        setSnackbar({
+          open: true,
+          message: 'Using offline orders data',
+          severity: 'warning'
+        });
       }
-    } catch (error) {
-      console.error('Error fetching orders:', error);
-      setSnackbar({
-        open: true,
-        message: error.message || 'Failed to load orders',
-        severity: 'error'
-      });
-      setOrders([]);
-      setFilteredOrders([]);
+    } finally {
+      setLoading(false);
     }
   };
 
   const fetchBillRequests = async () => {
     try {
-      if (navigator.onLine) {
-        const response = await axios.get('http://localhost:5001/api/bill-requests', {
-          headers: { Authorization: `Bearer ${token}` }
+      const response = await axios.get('/bill-requests');
+      if (response.data) {
+        setBillRequests(response.data);
+        setNotificationCount(response.data.length);
+        await saveOfflineBillRequests(response.data);
+      }
+    } catch (err) {
+      console.error('Error fetching bill requests:', err);
+      // Try to get offline bill requests
+      const offlineBillRequests = await getOfflineBillRequests();
+      if (offlineBillRequests) {
+        setBillRequests(offlineBillRequests);
+        setNotificationCount(offlineBillRequests.length);
+        setSnackbar({
+          open: true,
+          message: 'Using offline bill requests data',
+          severity: 'warning'
         });
-        const formattedRequests = response.data.map(table => ({
-          table_id: table.id,
-          table_number: table.table_number,
-          waiter_id: table.waiter_id,
-          waiter_name: table.waiter_name || 'Unknown',
-          timestamp: table.last_updated
-        }));
-        setBillRequests(formattedRequests);
-        setNotificationCount(formattedRequests.length);
-        await offlineService.saveBillRequestOffline(formattedRequests); // Cache bill requests
       } else {
-        const offlineRequests = await offlineService.getOfflineBillRequests();
-        setBillRequests(offlineRequests);
-        setNotificationCount(offlineRequests.length);
+        setSnackbar({
+          open: true,
+          message: 'Failed to load bill requests',
+          severity: 'error'
+        });
       }
-    } catch (error) {
-      console.error('Error fetching bill requests:', error);
-      }
-    };
+    }
+  };
 
   useEffect(() => {
     fetchDashboardData();
     fetchOrders();
     fetchBillRequests();
 
-    const socket = io('http://localhost:5001');
-    socket.on('connect', () => console.log('Cashier connected to socket server'));
+    const socket = io('http://localhost:5001', {
+      auth: {
+        token: token
+      },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000
+    });
+
+    socket.on('connect', () => {
+      console.log('Cashier connected to socket server');
+      setSnackbar({
+        open: true,
+        message: 'Connected to real-time updates',
+        severity: 'success'
+      });
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setSnackbar({
+        open: true,
+        message: 'Failed to connect to real-time updates. Retrying...',
+        severity: 'error'
+      });
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Socket disconnected:', reason);
+      setSnackbar({
+        open: true,
+        message: 'Disconnected from real-time updates. Reconnecting...',
+        severity: 'warning'
+      });
+    });
     
     socket.on('order_created', (newOrder) => {
       console.log('New order received:', newOrder);
       setOrders(prevOrders => [newOrder, ...prevOrders]);
-      if (!navigator.onLine) offlineService.saveOrderOffline([newOrder]);
-        handleRefresh();
+      if (!navigator.onLine) socketService.saveOrderOffline([newOrder]);
+      handleRefresh();
       setSnackbar({ open: true, message: `New order #${newOrder.id} has been created`, severity: 'success' });
     });
 
@@ -377,7 +404,7 @@ export default function CashierDashboard() {
       });
       setNotificationCount(prevCount => prevCount + 1);
       setSnackbar({ open: true, message: `Table ${notification.table_number} has requested a bill`, severity: 'info' });
-      if (!navigator.onLine) offlineService.saveBillRequestOffline([formattedNotification]);
+      if (!navigator.onLine) socketService.saveBillRequestOffline([formattedNotification]);
     });
     
     socket.on('table_status_updated', (table) => {
@@ -424,7 +451,7 @@ export default function CashierDashboard() {
       } else {
         const filterDate = dateFilter === 'today' ? todayFormatted : dateFilter;
         const filtered = orders.filter(order => {
-          if (!order.created_at) return false;
+          if (!order?.created_at) return false;
           try {
             const orderDate = new Date(order.created_at).toISOString().split('T')[0];
             return orderDate === filterDate;
@@ -489,9 +516,7 @@ export default function CashierDashboard() {
   const handleUpdateOrderStatus = async (order) => {
     try {
       setUpdatingOrderId(order.id);
-      const response = await axios.get(`http://localhost:5001/api/orders/${order.id}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const response = await axios.get(`http://localhost:5001/api/orders/${order.id}`);
       const detailedOrder = response.data;
       setSelectedOrder(detailedOrder);
       setNewStatus(detailedOrder.status || 'pending');
@@ -526,10 +551,10 @@ export default function CashierDashboard() {
         return;
       }
       const paymentToSend = newStatus === 'paid' ? parseFloat(paymentAmount) : (parseFloat(paymentAmount) || selectedOrder.total_amount || 0);
-      const response = await axios.put(`http://localhost:5001/api/orders/${selectedOrder.id}/status`, {
+      const response = await axios.patch(`http://localhost:5001/api/orders/${selectedOrder.id}/status`, {
         status: newStatus,
         payment_amount: paymentToSend
-      }, { headers: { Authorization: `Bearer ${token}` } });
+      });
       setOrders(prevOrders => prevOrders.map(order => order.id === selectedOrder.id ? { ...order, status: newStatus } : order));
       setFilteredOrders(prevOrders => prevOrders.map(order => order.id === selectedOrder.id ? { ...order, status: newStatus } : order));
       setSnackbar({ open: true, message: `Order ${selectedOrder.id} status updated to ${newStatus}`, severity: 'success' });
@@ -587,19 +612,19 @@ export default function CashierDashboard() {
 
   const renderOrdersTable = () => (
     <TableContainer component={Paper} sx={{ mt: 2 }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Order ID</TableCell>
+      <Table>
+        <TableHead>
+          <TableRow>
+            <TableCell>Order ID</TableCell>
             <TableCell>Table</TableCell>
-              <TableCell>Time</TableCell>
-              <TableCell>Items</TableCell>
-              <TableCell>Total</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+            <TableCell>Time</TableCell>
+            <TableCell>Items</TableCell>
+            <TableCell>Total</TableCell>
+            <TableCell>Status</TableCell>
+            <TableCell>Actions</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
           {loading ? (
             <TableRow>
               <TableCell colSpan={7} align="center">
@@ -607,9 +632,9 @@ export default function CashierDashboard() {
               </TableCell>
             </TableRow>
           ) : filteredOrders.length > 0 ? (
-              filteredOrders.map((order) => (
+            filteredOrders.map((order) => (
               <TableRow key={order.id} hover>
-                  <TableCell>{order.id}</TableCell>
+                <TableCell>{order.id}</TableCell>
                 <TableCell>Table {order.table_number}</TableCell>
                 <TableCell>
                   {new Date(order.created_at).toLocaleString()}
@@ -619,25 +644,25 @@ export default function CashierDashboard() {
                 </TableCell>
                 <TableCell>
                   <Typography variant="body2">
-                    {order.items?.reduce((total, item) => total + (parseInt(item.quantity) || 0), 0) || 0} items
+                    {order.items?.reduce((total, item) => total + (parseInt(item?.quantity || 0) || 0), 0) || 0} items
                   </Typography>
                   {order.items?.map((item, idx) => (
                     <Typography key={idx} variant="caption" display="block" color="text.secondary">
-                      {item.quantity}x {item.name}
+                      {item?.quantity || 0}x {item?.name || 'Unknown Item'}
                     </Typography>
                   ))}
                 </TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>
                   {formatCurrency(order.total_amount || 0)}
                 </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={order.status}
-                      color={getStatusColor(order.status)}
-                      size="small"
-                    />
-                  </TableCell>
-                  <TableCell>
+                <TableCell>
+                  <Chip
+                    label={order.status || 'pending'}
+                    color={getStatusColor(order.status)}
+                    size="small"
+                  />
+                </TableCell>
+                <TableCell>
                   <Stack direction="row" spacing={1}>
                     <IconButton
                       size="small"
@@ -654,19 +679,19 @@ export default function CashierDashboard() {
                       <PrintIcon fontSize="small" />
                     </IconButton>
                   </Stack>
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-              <TableCell colSpan={7} align="center">
-                <Typography>No orders found for the selected date</Typography>
                 </TableCell>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            ))
+          ) : (
+            <TableRow>
+              <TableCell colSpan={7} align="center">
+                <Typography>No orders found for the selected date</Typography>
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 
   useEffect(() => {
@@ -761,6 +786,23 @@ export default function CashierDashboard() {
       )}
     </Box>
   );
+
+  if (error) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh', flexDirection: 'column' }}>
+        <Typography color="error" variant="h6" gutterBottom>
+          {error}
+        </Typography>
+        <Button variant="contained" onClick={() => {
+          setError(null);
+          fetchDashboardData();
+          fetchOrders();
+        }}>
+          Retry
+        </Button>
+      </Box>
+    );
+  }
 
   if (loading) {
     return (

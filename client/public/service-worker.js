@@ -28,15 +28,23 @@ self.addEventListener('install', (event) => {
       caches.open(API_CACHE_NAME).then((cache) => {
         console.log('Caching API routes');
         return Promise.all(
-          API_ROUTES.map(route => 
-            fetch(`http://localhost:5001${route}`)
-              .then(response => {
+          API_ROUTES.map(async route => {
+            try {
+              const response = await fetch(`http://localhost:5001${route}`, {
+                method: 'GET',
+                headers: {
+                  'Accept': 'application/json'
+                }
+              });
                 if (response.ok) {
                   return cache.put(route, response);
+              }
+            } catch (error) {
+              console.warn(`Failed to cache ${route}:`, error);
+              // Don't throw the error, just log it
+              return Promise.resolve();
                 }
               })
-              .catch(error => console.error(`Failed to cache ${route}:`, error))
-          )
         );
       })
     ])
@@ -82,6 +90,11 @@ self.addEventListener('fetch', (event) => {
 
   // Skip non-GET requests and non-cacheable URLs
   if (event.request.method !== 'GET' || !shouldCache(event.request.url)) {
+    return;
+  }
+
+  // Skip WebSocket upgrade requests
+  if (event.request.headers.get('upgrade') === 'websocket') {
     return;
   }
 

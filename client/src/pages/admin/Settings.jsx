@@ -33,7 +33,7 @@ import {
   Notifications as NotificationsIcon,
   Language as LanguageIcon
 } from '@mui/icons-material';
-import axios from 'axios';
+import { settingsAPI } from '../../services/apiService';
 
 export default function Settings() {
   const theme = useTheme();
@@ -66,9 +66,7 @@ export default function Settings() {
     const fetchSettings = async () => {
       try {
         setLoading(true);
-        const response = await axios.get('http://localhost:5001/api/settings', {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        });
+        const response = await settingsAPI.get();
         
         // Merge API settings with default settings
         if (response.data) {
@@ -103,9 +101,7 @@ export default function Settings() {
   const handleSaveSettings = async () => {
     try {
       setLoading(true);
-      await axios.put('http://localhost:5001/api/settings', settings, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
+      await settingsAPI.update(settings);
       
       setSnackbarMessage('Settings saved successfully!');
       setSnackbarOpen(true);

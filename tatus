@@ -1,0 +1,10 @@
+[33med8698b[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m  updated cashier side order and reccent table ticket with offline functionality
+[33mba5459f[m index DB offline cashier side fixes
+[33m90ac778[m updated code for admin side and cashier side dashbord
+[33m26b028a[m  first verion of the website prepared for hosting
+[33m8c77f59[m  Admin dashbord responvness Adjustments, filter of sales data and and status change of order  updates. has included in this commit
+[33mf7c97b8[m  this is an edit including the pages on the sales and the filter dates
+[33m52e1503[m  this iscommit include total sales number, total order status and total prints of recipts for both admin and cashier side of the system
+[33m0a9674d[m This is a part of which has alot update accoring to requested edits including the bartender,kitchen, admin and cahiers page
+[33mef2c186[m  my-whole-connection
+[33m3e75fc0[m First Version commit

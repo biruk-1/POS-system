@@ -52,188 +52,107 @@
 //   }
 // }; 
 
-import io from 'socket.io-client';
+import { io } from 'socket.io-client';
 import { saveBillRequestOffline } from './offlineService';
+import env from '../config/env';
 
 class SocketService {
   constructor() {
     this.socket = null;
     this.eventQueue = [];
-    this.connectionAttempts = 0;
-    this.maxRetries = 3;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
     this.retryDelay = 2000;
   }
 
-  async connect(token) {
+  connect(token) {
     if (this.socket?.connected) {
-      console.log('Socket already connected');
       return;
     }
 
-    if (!navigator.onLine) {
-      console.log('Socket connection skipped - offline mode');
-      return;
-    }
-
-    if (!token) {
-      console.log('No token available for socket connection');
-      return;
-    }
-
-    try {
-      if (this.socket) {
-        this.socket.close();
-        this.socket = null;
-      }
-
-      this.socket = io('http://localhost:5001', {
-        auth: { token },
-        transports: ['websocket', 'polling'],
-        path: '/socket.io/',
-        reconnection: true,
-        reconnectionAttempts: 3,
-        reconnectionDelay: 2000,
-        timeout: 10000,
-        forceNew: true,
-        autoConnect: false
-      });
-
-      this.setupEventListeners();
-      await this.connectWithRetry();
-    } catch (error) {
-      console.error('Socket initialization error:', error);
-      this.handleConnectionError(error);
-    }
-  }
-
-  async connectWithRetry() {
-    return new Promise((resolve, reject) => {
-      if (!this.socket) {
-        reject(new Error('Socket not initialized'));
-        return;
-      }
-
-      const connectTimeout = setTimeout(() => {
-        if (!this.socket?.connected) {
-          console.log('Socket connection timeout');
-          this.socket.close();
-          reject(new Error('Connection timeout'));
-        }
-      }, 10000);
-
-      this.socket.on('connect', () => {
-        clearTimeout(connectTimeout);
-        console.log('Socket connected successfully');
-        this.connectionAttempts = 0;
-        this.processEventQueue();
-        resolve();
-      });
-
-      this.socket.on('connect_error', (error) => {
-        clearTimeout(connectTimeout);
-        console.error('Socket connection error:', error);
-        
-        if (this.connectionAttempts < this.maxRetries) {
-          this.connectionAttempts++;
-          console.log(`Retrying connection (${this.connectionAttempts}/${this.maxRetries})`);
-          setTimeout(() => {
-            this.socket.connect();
-          }, this.retryDelay);
-        } else {
-          reject(error);
-        }
-      });
-
-      this.socket.connect();
+    this.socket = io(env.SOCKET_URL, {
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: this.maxReconnectAttempts,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+      path: '/socket.io',
+      forceNew: true,
+      withCredentials: true
     });
-  }
 
-  setupEventListeners() {
-    if (!this.socket) return;
+    this.socket.on('connect', () => {
+      console.log('Socket connected');
+      this.reconnectAttempts = 0;
+      this.processEventQueue();
+    });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      this.reconnectAttempts++;
+      
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.error('Max reconnection attempts reached');
+        this.disconnect();
+      } else {
+        // Try to reconnect with exponential backoff
+        setTimeout(() => {
+          this.connect(token);
+        }, this.retryDelay * Math.pow(2, this.reconnectAttempts));
+      }
+    });
 
     this.socket.on('disconnect', (reason) => {
       console.log('Socket disconnected:', reason);
-      if (reason === 'io server disconnect') {
-        // Server disconnected us, try to reconnect
-        setTimeout(() => this.connect(), this.retryDelay);
+      if (reason === 'io server disconnect' || reason === 'transport close') {
+        // Server initiated disconnect or transport error, try to reconnect
+        setTimeout(() => {
+          this.connect(token);
+        }, this.retryDelay);
       }
     });
 
     this.socket.on('error', (error) => {
       console.error('Socket error:', error);
-      this.handleConnectionError(error);
+      // Try to reconnect on error
+      setTimeout(() => {
+        this.connect(token);
+      }, this.retryDelay);
     });
 
-    // Handle reconnection
-    this.socket.io.on('reconnect', (attempt) => {
-      console.log('Socket reconnected after', attempt, 'attempts');
-      this.processEventQueue();
-    });
-
-    this.socket.io.on('reconnect_error', (error) => {
-      console.error('Socket reconnection error:', error);
-    });
-
-    this.socket.io.on('reconnect_failed', () => {
-      console.log('Socket reconnection failed');
-    });
+    return this.socket;
   }
 
-  handleConnectionError(error) {
-    console.error('Socket connection error:', error);
-    if (!navigator.onLine) {
-      console.log('Network is offline, queuing events');
+  disconnect() {
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+    }
+  }
+
+  getSocket() {
+    return this.socket;
+  }
+
+  emit(event, data) {
+    if (this.socket?.connected) {
+      this.socket.emit(event, data);
+    } else {
+      this.eventQueue.push({ event, data });
+      console.log(`Event ${event} queued for later emission`);
     }
   }
 
   on(event, callback) {
-    if (!this.socket) {
-      console.warn('Socket not initialized when attempting to listen to:', event);
-      return;
+    if (this.socket) {
+      this.socket.on(event, callback);
     }
-
-    this.socket.on(event, (data) => {
-      if (!navigator.onLine) {
-        console.log(`Queuing offline event: ${event}`);
-        this.eventQueue.push({ event, data });
-        if (event === 'bill_requested') {
-          saveBillRequestOffline(data).catch(error => {
-            console.error('Error saving bill request offline:', error);
-          });
-        }
-      } else {
-        try {
-          callback(data);
-        } catch (error) {
-          console.error(`Error in event handler for ${event}:`, error);
-        }
-      }
-    });
   }
 
-  emit(event, data) {
-    if (!navigator.onLine) {
-      console.log(`Queuing offline event emission: ${event}`);
-      this.eventQueue.push({ event, data });
-      if (event === 'bill_requested') {
-        saveBillRequestOffline(data).catch(error => {
-          console.error('Error saving bill request offline:', error);
-        });
-      }
-      return;
-    }
-
-    if (!this.socket?.connected) {
-      console.warn('Socket not connected, queuing event:', event);
-      this.eventQueue.push({ event, data });
-      return;
-    }
-
-    try {
-      this.socket.emit(event, data);
-    } catch (error) {
-      console.error(`Error emitting event ${event}:`, error);
-      this.eventQueue.push({ event, data });
+  off(event, callback) {
+    if (this.socket) {
+      this.socket.off(event, callback);
     }
   }
 
@@ -254,17 +173,6 @@ class SocketService {
         this.eventQueue.push({ event, data });
       }
     });
-  }
-
-  disconnect() {
-    if (this.socket) {
-      try {
-        this.socket.disconnect();
-      } catch (error) {
-        console.error('Error disconnecting socket:', error);
-      }
-      this.socket = null;
-    }
   }
 
   isConnected() {

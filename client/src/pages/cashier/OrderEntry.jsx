@@ -32,18 +32,15 @@ import {
   Remove as RemoveIcon,
   ShoppingCart as CartIcon,
   Delete as DeleteIcon,
-  Print as PrintIcon,
-  Save as SaveIcon,
   Receipt as ReceiptIcon
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 import { useNavigate } from 'react-router-dom';
-import { socket } from '../../services/socket';
+import socketService from '../../services/socket';
 import { 
   getMenuItemsOffline, 
   getTablesOffline,
   saveOrderOffline,
-  saveReceiptOffline,
   isOnline,
   saveMenuItemsOffline,
   saveTablesOffline,
@@ -69,17 +66,21 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 // Add response interceptor to handle errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error('API Error:', error.response?.data || error.message);
-    return Promise.reject(error);
+    const errorMessage = error.response?.data?.error || error.message || 'Unknown error';
+    console.error('API Error:', {
+      url: error.config?.url,
+      status: error.response?.status,
+      message: errorMessage,
+      data: error.response?.data
+    });
+    return Promise.reject(new Error(errorMessage));
   }
 );
 
@@ -122,7 +123,6 @@ export default function OrderEntry() {
         let itemsData, tablesData, waitersData;
 
         if (offlineMode) {
-          // Load data from IndexedDB in parallel
           [itemsData, tablesData, waitersData] = await Promise.all([
             getMenuItemsOffline().catch(error => {
               console.error('Error loading offline menu items:', error);
@@ -138,24 +138,21 @@ export default function OrderEntry() {
             })
           ]);
           
-          // Filter waiters from users
           waitersData = Array.isArray(waitersData) 
             ? waitersData.filter(user => user.role === 'waiter')
             : [];
         } else {
           try {
-            // Load data from API in parallel
-          const [itemsRes, tablesRes, waitersRes] = await Promise.all([
-            api.get('/api/items'),
-            api.get('/api/tables'),
-            api.get('/api/waiters')
-          ]);
+            const [itemsRes, tablesRes, waitersRes] = await Promise.all([
+              api.get('/api/items'),
+              api.get('/api/tables'),
+              api.get('/api/waiters')
+            ]);
 
             itemsData = itemsRes.data;
             tablesData = tablesRes.data;
             waitersData = waitersRes.data;
 
-          // Cache data for offline use
             await Promise.all([
               saveMenuItemsOffline(itemsData).catch(error => 
                 console.error('Error caching menu items:', error)
@@ -168,8 +165,7 @@ export default function OrderEntry() {
               )
             ]);
           } catch (apiError) {
-            console.error('API Error:', apiError);
-            // If API fails, try to load from offline storage
+            console.error('API Error:', apiError.message);
             [itemsData, tablesData, waitersData] = await Promise.all([
               getMenuItemsOffline(),
               getTablesOffline(),
@@ -180,24 +176,20 @@ export default function OrderEntry() {
 
             if (!itemsData.length && !tablesData.length && !waitersData.length) {
               throw new Error('Failed to load data from both API and offline storage');
-          }
+            }
           }
         }
 
-        // Update state with loaded data
         setItems(Array.isArray(itemsData) ? itemsData : []);
         setWaiters(Array.isArray(waitersData) ? waitersData : []);
 
-        // Log loaded data for debugging
         console.log('Loaded Data:', {
           items: itemsData.length,
           waiters: waitersData.length
         });
       } catch (error) {
         console.error('Error in loadData:', error);
-        setError(error.message || 'Failed to load required data');
-        
-        // Set empty arrays as fallback
+        setError(error.message || 'Failed to load data');
         setItems([]);
         setWaiters([]);
       } finally {
@@ -222,7 +214,7 @@ export default function OrderEntry() {
           : cartItem
       ));
     } else {
-      setCart([...cart, { ...item, quantity: 1, item_type: item.item_type || 'other' }]);
+      setCart([...cart, { ...item, quantity: 1, item_type: item.type || 'other' }]);
     }
   };
   
@@ -248,111 +240,95 @@ export default function OrderEntry() {
     return cart.reduce((total, item) => total + (item.price * item.quantity), 0).toFixed(2);
   };
   
-  const handlePlaceOrder = async () => {
+  const handlePlaceOrder = async (shouldPrint = false) => {
     if (cart.length === 0) {
-      setError('Cart is empty');
-      return;
+      setError('Cart is empty.');
+      return false;
     }
 
     if (!waiterId) {
-      setError('Please select a waiter');
-      return;
+      setError('Please select a waiter.');
+      return false;
     }
 
-    const orderData = {
-      id: Date.now().toString(),
-      items: cart.map(item => ({
-        id: item.id,
-        name: item.name,
-        quantity: item.quantity,
-        price: item.price,
-        type: item.item_type
-      })),
-      total: calculateTotal(),
-      waiter_id: waiterId,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      isOffline: !navigator.onLine
-    };
-
     try {
-      if (offlineMode) {
-        // Save order to IndexedDB
-        const orderId = await saveOrderOffline({
-          ...orderData,
-          status: 'pending',
-          created_at: new Date().toISOString()
-        });
-
-        // Save receipt to IndexedDB
-        await saveReceiptOffline({
-          order_id: orderId,
-          items: orderData.items,
-          total: orderData.total,
-          created_at: new Date().toISOString()
-        });
-
-        // Show success message
-        setSuccess('Order saved offline. It will be synced when you are back online.');
-      } else {
-        // Send order to server
-        const response = await api.post('/api/orders', orderData);
-        
-        // Emit order event
-        socket.emit('newOrder', response.data);
-        
-        // Show success message
-        setSuccess('Order placed successfully!');
+      setLoading(true);
+      setError('');
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found.');
       }
-      
-      // Clear the cart and reset fields
-      setCart([]);
-      
-      // Navigate back to dashboard to show the updated order
-      setTimeout(() => {
-        navigate('/cashier/dashboard');
-      }, 1500);
+
+      const orderData = {
+        items: cart.map(item => ({
+          id: item.id,
+          quantity: item.quantity,
+          price: item.price,
+          notes: item.notes || ''
+        })),
+        total: parseFloat(calculateTotal()),
+        waiter_id: waiterId,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        isOffline: !navigator.onLine
+      };
+
+      console.log('Placing order with data:', orderData);
+
+      if (offlineMode) {
+        await saveOrderOffline(orderData);
+        setSuccess('Order saved offline. Will sync when online.');
+        setCart([]);
+        setWaiterId('');
+        return true;
+      }
+
+      const response = await api.post('/api/orders', orderData);
+      if (response.data) {
+        setCart([]);
+        setWaiterId('');
+        setSuccess('Order placed successfully!');
+        socketService.emit('newOrder', response.data);
+        return true;
+      }
     } catch (error) {
       console.error('Error placing order:', error);
-      if (error.response?.status === 403) {
-        // Token expired or invalid
-        localStorage.removeItem('token');
-        navigate('/login');
-      } else {
-        setError('Failed to place order: ' + (error.response?.data?.error || error.message));
-      }
+      setError(error.message || 'Failed to place order');
+      return false;
+    } finally {
+      setLoading(false);
     }
   };
   
   const handlePrintReceipt = async () => {
     if (cart.length === 0) {
-      setError('Cart is empty');
+      setError('Cart is empty.');
       return;
     }
 
     if (!waiterId) {
-      setError('Please select a waiter');
+      setError('Please select a waiter.');
       return;
     }
 
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('No authentication token found');
+      setLoading(true);
+      setError('');
+
+      // Place order first
+      const orderPlaced = await handlePlaceOrder(true);
+      if (!orderPlaced) {
+        throw new Error('Failed to place order before printing.');
       }
 
-      // Separate items by type
+      const printWindow = window.open('', '_blank', 'width=300,height=600');
+      if (!printWindow) {
+        throw new Error('Please allow pop-ups to print tickets.');
+      }
+
       const foodItems = cart.filter(item => item.item_type === 'food');
       const drinkItems = cart.filter(item => item.item_type === 'drink');
 
-      // Create a printable version of the tickets
-      const printWindow = window.open('', '_blank', 'width=300,height=600');
-      if (!printWindow) {
-        alert('Please allow pop-ups to print tickets');
-        return;
-      }
-
-      // Add the content to the new window
       printWindow.document.write(`
         <html>
           <head>
@@ -439,7 +415,6 @@ export default function OrderEntry() {
           <body onload="window.print();">
       `);
 
-      // Add food ticket if it exists
       if (foodItems.length > 0) {
         printWindow.document.write(`
           <div class="ticket">
@@ -472,7 +447,6 @@ export default function OrderEntry() {
         `);
       }
 
-      // Add drink ticket if it exists
       if (drinkItems.length > 0) {
         printWindow.document.write(`
           <div class="ticket">
@@ -508,49 +482,20 @@ export default function OrderEntry() {
       printWindow.document.write('</body></html>');
       printWindow.document.close();
 
-      // Save order data for offline/online sync
-    const orderData = {
-      items: cart.map(item => ({
-        id: item.id,
-        name: item.name,
-        quantity: item.quantity,
-        price: item.price,
-          item_type: item.item_type
-      })),
-      total: calculateTotal(),
-      waiter_id: waiterId,
-      status: 'pending',
-        created_at: new Date().toISOString()
-    };
-
-      if (offlineMode) {
-        // Save order to IndexedDB
-        const orderId = await saveOrderOffline(orderData);
-        setSuccess('Order saved offline. It will be synced when you are back online.');
-      } else {
-        // Send order to server
-        const response = await api.post('/api/orders', orderData);
-        socket.emit('newOrder', response.data);
-        setSuccess('Order placed successfully!');
-      }
-      
-      // Clear cart and reset fields
-      setCart([]);
-      setWaiterId('');
-      
+      setSuccess('Receipt printed successfully!');
     } catch (error) {
       console.error('Error printing receipt:', error);
       if (error.response?.status === 401 || error.response?.status === 403) {
-        // Token expired or invalid
         localStorage.removeItem('token');
         navigate('/login');
       } else {
-        setError('Failed to print receipt: ' + (error.response?.data?.error || error.message));
+        setError(error.message || 'Failed to print receipt.');
       }
+    } finally {
+      setLoading(false);
     }
   };
   
-  // Filter items based on active tab
   const filteredItems = activeTab === 'all' 
     ? (Array.isArray(items) ? items : [])
     : (Array.isArray(items) ? items.filter(item => item.item_type === activeTab) : []);
@@ -584,7 +529,6 @@ export default function OrderEntry() {
       )}
       
       <Grid container spacing={3}>
-        {/* Left side - Menu Items */}
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 2, mb: 2 }}>
             <Tabs 
@@ -617,9 +561,7 @@ export default function OrderEntry() {
                         height: '100%',
                         display: 'flex',
                         flexDirection: 'column',
-                        '&:hover': {
-                          boxShadow: 6
-                        },
+                        '&:hover': { boxShadow: 6 },
                         backgroundColor: item.item_type === 'food' ? '#fffaf0' : '#f0f8ff'
                       }}
                     >
@@ -660,7 +602,6 @@ export default function OrderEntry() {
           </Paper>
         </Grid>
         
-        {/* Right side - Order Summary */}
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 2, position: 'sticky', top: '20px' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -718,7 +659,6 @@ export default function OrderEntry() {
                         secondaryAction={
                           <IconButton 
                             edge="end" 
-                            aria-label="delete"
                             onClick={() => handleDeleteFromCart(item.id)}
                           >
                             <DeleteIcon />
@@ -741,8 +681,7 @@ export default function OrderEntry() {
                           </Typography>
                           <IconButton 
                             size="small"
-                            onClick={() => handleAddToCart(item)}
-                          >
+                            onClick={() => handleAddToCart(item)}>
                             <AddIcon fontSize="small" />
                           </IconButton>
                         </Box>
@@ -764,8 +703,8 @@ export default function OrderEntry() {
                     color="primary"
                     size="large"
                     fullWidth
-                    onClick={handlePlaceOrder}
-                    disabled={cart.length === 0}
+                    onClick={() => handlePlaceOrder()}
+                    disabled={loading || cart.length === 0}
                   >
                     Place Order
                   </Button>
@@ -777,7 +716,7 @@ export default function OrderEntry() {
                     fullWidth
                     startIcon={<ReceiptIcon />}
                     onClick={handlePrintReceipt}
-                    disabled={cart.length === 0}
+                    disabled={loading || cart.length === 0}
                   >
                     Print Receipt
                   </Button>
@@ -807,7 +746,7 @@ export default function OrderEntry() {
         open={!!error} 
         autoHideDuration={6000} 
         onClose={() => setError('')}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       >
         <Alert 
           onClose={() => setError('')} 
@@ -819,4 +758,4 @@ export default function OrderEntry() {
       </Snackbar>
     </Container>
   );
-} 
+}

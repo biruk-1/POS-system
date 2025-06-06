@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'pos-system-db';
-const DB_VERSION = 2; // Match version with offlineService.js
+const DB_VERSION = 6; // Match version with offlineService.js
 
 // Initialize database
 let dbPromise = null;
@@ -25,7 +25,7 @@ const initializeDB = async () => {
         if (!db.objectStoreNames.contains('users')) {
           const userStore = db.createObjectStore('users', { keyPath: 'id' });
           userStore.createIndex('username', 'username', { unique: true });
-          userStore.createIndex('phone_number', 'phone_number', { unique: false });
+          userStore.createIndex('phone_number', 'phone_number', { unique: true });
           userStore.createIndex('role', 'role', { unique: false });
         }
 
@@ -86,6 +86,24 @@ const initializeDB = async () => {
           billStore.createIndex('order_id', 'order_id', { unique: false });
           billStore.createIndex('status', 'status', { unique: false });
         }
+
+        // Reports store
+        if (!db.objectStoreNames.contains('reports')) {
+          const reportStore = db.createObjectStore('reports', { keyPath: 'id', autoIncrement: true });
+          reportStore.createIndex('type', 'type', { unique: false });
+          reportStore.createIndex('date', 'date', { unique: false });
+        }
+
+        // Create stores if they don't exist
+        ['orders', 'receipts', 'syncQueue', 'waiters', 'billRequests', 'menuItems', 'tables', 'reports'].forEach(storeName => {
+          if (!db.objectStoreNames.contains(storeName)) {
+            const store = db.createObjectStore(storeName, { keyPath: 'id', autoIncrement: true });
+            if (storeName === 'reports') {
+              store.createIndex('type', 'type', { unique: false });
+              store.createIndex('date', 'date', { unique: false });
+            }
+          }
+        });
       },
       blocked(currentVersion, blockedVersion, event) {
         console.log('Database blocked:', { currentVersion, blockedVersion, event });
