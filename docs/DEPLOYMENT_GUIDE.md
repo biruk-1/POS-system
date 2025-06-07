@@ -9,6 +9,7 @@
 6. [AWS Deployment Guide](#aws-deployment-guide)
 7. [Security Considerations](#security-considerations)
 8. [Troubleshooting](#troubleshooting)
+9. [File Structure Overview](#file-structure-overview)
 
 ## Project Overview
 
@@ -374,4 +375,46 @@ pm2 monit
 
 - Technical Support: [Your Contact]
 - Emergency: [Emergency Contact]
-- Documentation: [Documentation URL] 
+- Documentation: [Documentation URL]
+
+## File Structure Overview
+
+### Server Side (`/server/src`)
+
+- `index.js` — Main entry point for the Express server and Socket.IO setup.
+- `config/` — Configuration files:
+  - `env.js` — Loads environment variables and app constants.
+  - `database.js` — Database connection and initialization logic.
+  - `socket.js` — Socket.IO server configuration.
+  - `multer.js` — File upload configuration.
+- `routes/` — All API route definitions (e.g., `orders.routes.js`, `auth.routes.js`, etc.).
+- `middleware/` — Express middleware (e.g., `auth.js` for authentication and role checks).
+- `uploads/` — Directory for uploaded files (e.g., product images).
+- `db/` — (Reserved for database-related scripts or migrations, if any).
+- `controllers/` — (Reserved for controller logic, if separated from routes).
+- `models/` — (Reserved for database models, if using ORM or structured models).
+- `utils/` — (Reserved for utility/helper functions).
+- `reset-db.js` — Script to reset or seed the database.
+- `pos.db` — SQLite database file.
+
+### Client Side (`/client/src`)
+
+- `index.jsx` / `main.jsx` — Main entry points for the React app.
+- `App.jsx` / `App.tsx` — Root React component.
+- `config/` — App configuration:
+  - `env.js` — Centralized environment variables for the client.
+  - `api.js` — API endpoint definitions.
+- `pages/` — Main page components (e.g., `Login.jsx`, `Dashboard.jsx`, `Orders.jsx`, etc.), organized by role (admin, cashier, kitchen, waiter, bartender).
+- `components/` — Reusable UI components and layouts (e.g., `CashierLayout.jsx`, `Footer.jsx`).
+- `services/` — Service modules for API calls, sockets, offline support, and database helpers:
+  - `axiosConfig.js` — Axios instance with auth and base URL.
+  - `apiService.js` — API call wrappers.
+  - `socketService.js` / `socket.js` — Socket.IO client logic.
+  - `db.js` — IndexedDB/local database helpers.
+  - `offlineService.js` — Offline data management.
+  - `initService.js` — App initialization logic.
+- `store/` — Redux store setup and slices (e.g., `authSlice.js`).
+- `features/` — (Reserved for feature-specific modules, e.g., authentication).
+- `assets/` — Static assets (images, icons, etc.).
+- `utils/` — Utility/helper functions (e.g., `currencyFormatter.js`).
+- `contexts/` — React context providers (if used). 

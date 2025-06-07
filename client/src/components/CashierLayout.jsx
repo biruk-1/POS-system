@@ -37,7 +37,7 @@ import {
 
 const drawerWidth = 280;
 
-const CashierLayout = () => {
+function CashierLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -309,6 +309,6 @@ const CashierLayout = () => {
       </Box>
     </Box>
   );
-};
+}
 
-export default CashierLayout; 
+export default CashierLayout;
