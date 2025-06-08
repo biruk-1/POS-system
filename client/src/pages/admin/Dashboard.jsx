@@ -168,7 +168,9 @@ export default function AdminDashboard() {
   const [sales, setSales] = useState({
     totalSales: 0,
     completedOrders: 0,
-    waiterStats: []
+    averageOrder: 0,
+    waiterStats: [],
+    topItems: []
   });
   const [selectedWaiter, setSelectedWaiter] = useState('all');
   const [waiters, setWaiters] = useState([]);
@@ -371,40 +373,41 @@ export default function AdminDashboard() {
     }
   }, [orders, selectedWaiter, searchTerm, statusFilter, dateRange]);
 
-  // Completely rewritten fetch sales function for admin
+  // Fetch sales data for admin dashboard
   const fetchAdminSales = async (timeRangeParam = timeRange, waiterId = selectedWaiter, customDateParam = customDate) => {
     try {
-      const params = new URLSearchParams();
-      params.append('timeRange', timeRangeParam);
-      if (waiterId !== 'all') params.append('waiterId', waiterId);
-      if (customDateParam) params.append('date', customDateParam.toISOString().split('T')[0]);
+      setLoading(true);
       
-      console.log('Fetching sales data with params:', Object.fromEntries(params));
-      
-      const response = await fetch(`${env.API_URL}/api/reports/sales/daily?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
+      const params = new URLSearchParams({
+        timeRange: timeRangeParam,
+        ...(waiterId !== 'all' && { waiterId }),
+        ...(customDateParam && { date: customDateParam.toISOString().split('T')[0] })
       });
       
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
-        console.error('Sales data fetch error:', errorData);
-        throw new Error(errorData.error || 'Failed to fetch sales data');
-      }
+      console.log('Fetching admin sales data with params:', Object.fromEntries(params));
       
-      const data = await response.json();
-      console.log('Received sales data:', data);
+      const response = await axios.get(`${API_ENDPOINTS.REPORTS_SALES_DAILY}?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      const data = response.data;
+      console.log('Received admin sales data:', data);
       
       setSales({
         totalSales: parseFloat(data.totalSales) || 0,
         completedOrders: parseInt(data.completedOrders) || 0,
+        averageOrder: data.completedOrders > 0 ? data.totalSales / data.completedOrders : 0,
         waiterStats: Array.isArray(data.waiterStats) ? data.waiterStats.map(stat => ({
           ...stat,
           total_sales: parseFloat(stat.total_sales) || 0,
           order_count: parseInt(stat.order_count) || 0,
-          avgOrder: stat.order_count > 0 ? parseFloat(stat.total_sales) / parseInt(stat.order_count) : 0
+          average_order: stat.order_count > 0 ? stat.total_sales / stat.order_count : 0
+        })) : [],
+        topItems: Array.isArray(data.topItems) ? data.topItems.map(item => ({
+          ...item,
+          total_revenue: parseFloat(item.total_revenue) || 0,
+          total_quantity: parseInt(item.total_quantity) || 0,
+          order_count: parseInt(item.order_count) || 0
         })) : []
       });
     } catch (error) {

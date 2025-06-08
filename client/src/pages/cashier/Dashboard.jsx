@@ -66,15 +66,14 @@ import {
 } from '@mui/icons-material';
 import { formatCurrency } from '../../utils/currencyFormatter';
 import { 
-  saveDashboardDataOffline as saveOfflineDashboardData,
+  saveDashboardDataOffline,
   getOfflineDashboardData,
-  saveOrderOffline as saveOfflineOrders,
+  saveOrderOffline,
   getOfflineOrders,
-  saveBillRequestOffline as saveOfflineBillRequests,
+  saveBillRequestOffline,
   getOfflineBillRequests,
   syncWithServer,
-  initOfflineListeners,
-  saveOrderOffline
+  initOfflineListeners
 } from '../../services/offlineService';
 import socketService from '../../services/socketService';
 import Footer from '../../components/Footer';
@@ -253,20 +252,24 @@ export default function CashierDashboard() {
       const response = await axios.get('/dashboard/cashier');
       if (response.data) {
         setData(response.data);
-        await saveOfflineDashboardData(response.data);
+        await saveDashboardDataOffline(response.data);
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
-      setError('Failed to load dashboard data');
+      setError('Failed to load dashboard data. Using offline or default data.');
       const offlineData = await getOfflineDashboardData();
-      if (offlineData) {
-        setData(offlineData);
-        setSnackbar({
-          open: true,
-          message: 'Using offline data',
-          severity: 'warning'
-        });
-      }
+      setData(offlineData || {
+        totalSales: 0,
+        pendingOrders: 0,
+        completedOrders: 0,
+        dailyRevenue: 0,
+        salesByCategory: { food: 0, drinks: 0 }
+      });
+      setSnackbar({
+        open: true,
+        message: 'Using offline or default dashboard data',
+        severity: 'warning'
+      });
     } finally {
       setLoading(false);
     }
@@ -279,7 +282,7 @@ export default function CashierDashboard() {
       const response = await axios.get('/orders');
       if (response.data) {
         setOrders(response.data);
-        await saveOfflineOrders(response.data);
+        await saveOrderOffline(response.data);
       }
     } catch (err) {
       console.error('Error fetching orders:', err);
@@ -306,11 +309,10 @@ export default function CashierDashboard() {
       if (response.data) {
         setBillRequests(response.data);
         setNotificationCount(response.data.length);
-        await saveOfflineBillRequests(response.data);
+        await saveBillRequestOffline(response.data);
       }
     } catch (err) {
       console.error('Error fetching bill requests:', err);
-      // Try to get offline bill requests
       const offlineBillRequests = await getOfflineBillRequests();
       if (offlineBillRequests) {
         setBillRequests(offlineBillRequests);
@@ -376,7 +378,7 @@ export default function CashierDashboard() {
     socket.on('order_created', (newOrder) => {
       console.log('New order received:', newOrder);
       setOrders(prevOrders => [newOrder, ...prevOrders]);
-      if (!navigator.onLine) socketService.saveOrderOffline([newOrder]);
+      if (!navigator.onLine) saveOrderOffline([newOrder]);
       handleRefresh();
       setSnackbar({ open: true, message: `New order #${newOrder.id} has been created`, severity: 'success' });
     });
@@ -404,7 +406,7 @@ export default function CashierDashboard() {
       });
       setNotificationCount(prevCount => prevCount + 1);
       setSnackbar({ open: true, message: `Table ${notification.table_number} has requested a bill`, severity: 'info' });
-      if (!navigator.onLine) socketService.saveBillRequestOffline([formattedNotification]);
+      if (!navigator.onLine) saveBillRequestOffline([formattedNotification]);
     });
     
     socket.on('table_status_updated', (table) => {
@@ -424,7 +426,6 @@ export default function CashierDashboard() {
   const handleDateFilterChange = (event) => {
     const newDateFilter = event.target.value;
     console.log('Date filter changed to:', newDateFilter);
-    
     if (newDateFilter === 'today') {
       setDateFilter(todayFormatted);
     } else if (newDateFilter === 'custom') {
@@ -573,7 +574,7 @@ export default function CashierDashboard() {
 
   const handleGenerateReceipt = async (order) => {
     try {
-    navigate(`/cashier/receipt/${order.id}`);
+      navigate(`/cashier/receipt/${order.id}`);
       setSnackbar({ open: true, message: `Navigating to receipt for order #${order.id}`, severity: 'success' });
     } catch (error) {
       console.error('Error navigating to receipt:', error);

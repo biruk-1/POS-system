@@ -27,7 +27,7 @@ const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY = 5000; // 5 seconds
 
 const DB_NAME = 'pos-system-db';
-const DB_VERSION = 6;
+const DB_VERSION = 7; // Incremented to ensure schema update
 
 // Add connection management
 let dbConnection = null;
@@ -64,7 +64,7 @@ const getConnection = async () => {
         }
 
         if (!db.objectStoreNames.contains('dashboard')) {
-          const dashboardStore = db.createObjectStore('dashboard', { keyPath: 'id', autoIncrement: true });
+          const dashboardStore = db.createObjectStore('dashboard', { keyPath: 'id' });
           dashboardStore.createIndex('timestamp', 'timestamp', { unique: false });
           dashboardStore.createIndex('synced', 'synced', { unique: false });
         }
@@ -121,7 +121,6 @@ const executeDbOperation = async (operation, storeName, mode = 'readonly') => {
   while (retries > 0) {
     try {
       const db = await getConnection();
-      // Verify store exists
       if (!db.objectStoreNames.contains(storeName)) {
         console.warn(`Store ${storeName} not found, attempting to reinitialize database`);
         await clearDatabase();
@@ -149,11 +148,9 @@ const checkStorageQuota = async () => {
       const estimate = await navigator.storage.estimate();
       const percentageUsed = (estimate.usage / estimate.quota) * 100;
       console.log(`Storage quota used: ${percentageUsed.toFixed(2)}%`);
-      
       if (percentageUsed > 90) {
         await cleanupStorage();
       }
-      
       return percentageUsed < 95;
     }
     return true;
@@ -167,17 +164,14 @@ const checkStorageQuota = async () => {
 const cleanupStorage = async () => {
   try {
     const db = await getConnection();
-    
     const tx = db.transaction('syncQueue', 'readwrite');
     const syncStore = tx.objectStore('syncQueue');
     const oldItems = await syncStore.index('created_at').getAll(IDBKeyRange.upperBound(
       new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
     ));
-    
     for (const item of oldItems) {
       await syncStore.delete(item.id);
     }
-    
     await tx.done;
     console.log('Cleaned up old sync queue items');
   } catch (error) {
@@ -226,13 +220,10 @@ export const initializeOfflineStorage = async () => {
 export const initOfflineListeners = (onlineCallback, offlineCallback) => {
   if (!window._listenersInitialized) {
     initializeOfflineStorage();
-    
     window.addEventListener('online', onlineCallback);
     window.addEventListener('offline', offlineCallback);
-    
     window._listenersInitialized = true;
   }
-  
   return () => {
     window.removeEventListener('online', onlineCallback);
     window.removeEventListener('offline', offlineCallback);
@@ -244,7 +235,6 @@ export const initOfflineListeners = (onlineCallback, offlineCallback) => {
 export const saveUserData = async (userData) => {
   try {
     const db = await getConnection();
-    
     const userToSave = {
       id: userData.id,
       username: userData.username,
@@ -256,16 +246,12 @@ export const saveUserData = async (userData) => {
       created_at: new Date().toISOString(),
       last_login: new Date().toISOString()
     };
-    
     await db.put('users', userToSave);
-    
     localStorage.setItem(USER_DATA_KEY, JSON.stringify(userToSave));
-    
     const currentUsers = JSON.parse(localStorage.getItem(USERS_DATA_KEY) || '[]');
     const updatedUsers = currentUsers.filter(u => u.id !== userData.id);
     updatedUsers.push(userToSave);
     localStorage.setItem(USERS_DATA_KEY, JSON.stringify(updatedUsers));
-    
     return true;
   } catch (error) {
     console.error('Error saving user data:', error);
@@ -277,14 +263,12 @@ export const getUserData = async (userId) => {
   try {
     const db = await getConnection();
     const user = await db.get('users', userId);
-    
     if (!user) {
       const cachedUser = JSON.parse(localStorage.getItem(USER_DATA_KEY) || 'null');
       if (cachedUser && cachedUser.id === userId) {
         return cachedUser;
       }
     }
-    
     return user;
   } catch (error) {
     console.error('Error getting user data:', error);
@@ -299,7 +283,6 @@ export const initializeOfflineFunctionality = async () => {
       console.log('Offline functionality already initialized');
       return true;
     }
-
     console.log('Initializing offline functionality...');
     await initializeOfflineStorage();
     window._dbInitialized = true;
@@ -319,12 +302,10 @@ export const getUserByUsername = async (username) => {
       console.log('User found in localStorage');
       return userFromLocalStorage;
     }
-    
     const db = await getConnection();
     const tx = db.transaction('users', 'readonly');
     const store = tx.objectStore('users');
     const index = store.index('username');
-    
     const user = await index.get(username);
     console.log('User found in IndexedDB:', user);
     return user;
@@ -338,17 +319,13 @@ export const getUserByUsername = async (username) => {
 export const saveUserForOffline = async (userData) => {
   try {
     console.log('Saving user data for offline access:', userData);
-    
     if (userData.role === 'cashier' && !userData.phone_number) {
       throw new Error('Phone number is required for cashier');
     }
-
     const db = await getConnection();
     const tx = db.transaction('users', 'readwrite');
     const store = tx.objectStore('users');
-
     const existingUser = await store.get(userData.id);
-    
     if (existingUser) {
       await store.put({
         ...existingUser,
@@ -361,7 +338,6 @@ export const saveUserForOffline = async (userData) => {
         phone_number: userData.phone_number || null
       });
     }
-
     await tx.complete;
     console.log('User data saved successfully for offline access');
   } catch (error) {
@@ -375,19 +351,16 @@ export const saveUsersData = async (users) => {
     const db = await getConnection();
     const tx = db.transaction('users', 'readwrite');
     const store = tx.objectStore('users');
-    
     for (const user of users) {
       try {
         if (user.phone_number) {
           const phoneIndex = store.index('phone_number');
           const existingUser = await phoneIndex.get(user.phone_number);
-          
           if (existingUser && existingUser.id !== user.id) {
             console.warn(`Skipping user ${user.id} - phone number ${user.phone_number} already exists`);
             continue;
           }
         }
-        
         await store.put({
           id: user.id,
           username: user.username,
@@ -401,15 +374,12 @@ export const saveUsersData = async (users) => {
         console.error(`Error saving user ${user.id}:`, error);
       }
     }
-    
     await tx.done;
-    
     try {
       localStorage.setItem(USERS_DATA_KEY, JSON.stringify(users));
     } catch (localStorageError) {
       console.error('Error saving to localStorage:', localStorageError);
     }
-    
     return true;
   } catch (error) {
     console.error('Error saving users data:', error);
@@ -422,11 +392,9 @@ export const getUsersData = async () => {
   try {
     const db = await getConnection();
     const users = await db.getAll('users');
-    
     if (users.length === 0) {
       return JSON.parse(localStorage.getItem(USERS_DATA_KEY) || '[]');
     }
-    
     return users;
   } catch (error) {
     console.error('Error getting users data:', error);
@@ -438,7 +406,6 @@ export const getUsersData = async () => {
 export const saveWaitersData = async (waiters) => {
   try {
     const db = await getConnection();
-    
     await Promise.all(waiters.map(waiter => 
       db.put('waiters', {
         id: waiter.id,
@@ -448,7 +415,6 @@ export const saveWaitersData = async (waiters) => {
         created_at: new Date().toISOString()
       })
     ));
-    
     localStorage.setItem(WAITERS_DATA_KEY, JSON.stringify(waiters));
     return true;
   } catch (error) {
@@ -462,11 +428,9 @@ export const getOfflineWaiters = async () => {
   try {
     const db = await getConnection();
     const waiters = await db.getAll('waiters');
-    
     if (waiters.length === 0) {
       return JSON.parse(localStorage.getItem(WAITERS_DATA_KEY) || '[]');
     }
-    
     return waiters;
   } catch (error) {
     console.error('Error getting offline waiters:', error);
@@ -497,7 +461,6 @@ export const saveBillRequestOffline = async (requests) => {
         timestamp: new Date().toISOString()
       });
     }
-    
     await tx.done;
     console.log('Bill requests saved offline');
   } catch (error) {
@@ -550,7 +513,6 @@ export const saveOrderOffline = async (orders) => {
         timestamp: new Date().toISOString()
       });
     }
-    
     await tx.done;
     console.log('Orders saved offline');
   } catch (error) {
@@ -573,20 +535,17 @@ export const getOfflineOrders = async () => {
 export const saveReceiptOffline = async (receiptData) => {
   try {
     const db = await getConnection();
-    
     const receiptId = await db.add('receipts', {
       ...receiptData,
       created_at: new Date().toISOString(),
       isOffline: true
     });
-    
     await db.add('syncQueue', {
       type: 'receipt',
       data: receiptData,
       status: 'pending',
       created_at: new Date().toISOString()
     });
-    
     return receiptId;
   } catch (error) {
     console.error('Error saving receipt offline:', error);
@@ -649,7 +608,6 @@ export const saveTablesOffline = async (tables) => {
     const db = await getConnection();
     const tx = db.transaction('tables', 'readwrite');
     const store = tx.objectStore('tables');
-    
     await Promise.all(tables.map(table => {
       return store.put({
         id: table.id,
@@ -659,7 +617,6 @@ export const saveTablesOffline = async (tables) => {
         last_updated: new Date().toISOString()
       });
     }));
-    
     await tx.done;
     localStorage.setItem(TABLES_DATA_KEY, JSON.stringify(tables));
     return true;
@@ -688,25 +645,30 @@ export const getTablesOffline = async () => {
 export const saveDashboardDataOffline = async (data) => {
   try {
     if (!data) return;
-    
+
     const db = await getConnection();
+    let tx = db.transaction('dashboard', 'readwrite');
+    let store = tx.objectStore('dashboard');
+
+    // Check if store exists and create it if missing
     if (!db.objectStoreNames.contains('dashboard')) {
-      console.warn('Dashboard store not found, reinitializing database');
+      console.warn('Dashboard store not found, upgrading database');
       await clearDatabase();
-      await initializeOfflineStorage();
-      throw new Error('Dashboard store not found, database reinitialized');
+      await initializeOfflineStorage(); // Reinitialize to recreate stores
+      tx = db.transaction('dashboard', 'readwrite');
+      store = tx.objectStore('dashboard');
+      if (!store) {
+        throw new Error('Failed to recreate dashboard store');
+      }
     }
-    
-    const tx = db.transaction('dashboard', 'readwrite');
-    const store = tx.objectStore('dashboard');
-    
+
     const dashboardData = {
       ...data,
       timestamp: new Date().toISOString(),
       synced: true,
-      id: 1
+      id: 1 // Use a fixed ID for simplicity
     };
-    
+
     await store.put(dashboardData);
     await tx.done;
     console.log('Dashboard data saved offline successfully');
@@ -720,22 +682,21 @@ export const getOfflineDashboardData = async () => {
   try {
     const db = await getConnection();
     if (!db.objectStoreNames.contains('dashboard')) {
-      console.warn('Dashboard store not found, reinitializing database');
+      console.warn('Dashboard store not found, upgrading database');
       await clearDatabase();
       await initializeOfflineStorage();
-      return null; // Return null as no data exists after reinitialization
+      return null; // Return null if store is still not available after reinitialization
     }
-    
+
     const tx = db.transaction('dashboard', 'readonly');
     const store = tx.objectStore('dashboard');
-    
     const data = await store.get(1);
     await tx.done;
-    
-    return data;
+
+    return data || { totalSales: 0, pendingOrders: 0, completedOrders: 0, dailyRevenue: 0, salesByCategory: { food: 0, drinks: 0 } };
   } catch (error) {
     console.error('Error getting dashboard data offline:', error);
-    throw error;
+    return { totalSales: 0, pendingOrders: 0, completedOrders: 0, dailyRevenue: 0, salesByCategory: { food: 0, drinks: 0 } }; // Fallback data
   }
 };
 
@@ -802,7 +763,6 @@ export const syncWithServer = async () => {
         }
       } catch (error) {
         console.error(`Error syncing ${item.type}:`, error);
-        
         await db.put('syncQueue', {
           ...item,
           retry_count: (item.retry_count || 0) + 1,
@@ -811,11 +771,10 @@ export const syncWithServer = async () => {
         });
       }
     }
-    
-    return true;
+    return { success: true, message: 'Sync completed' };
   } catch (error) {
     console.error('Error in sync process:', error);
-    throw error;
+    throw { success: false, message: `Sync failed: ${error.message}` };
   }
 };
 
@@ -823,7 +782,6 @@ export const syncWithServer = async () => {
 export const initializeSyncInterval = () => {
   if (navigator.onLine) {
     syncWithServer().catch(console.error);
-    
     setInterval(() => {
       if (navigator.onLine) {
         syncWithServer().catch(console.error);
@@ -855,23 +813,19 @@ export const getCashierByPhone = async (phoneNumber) => {
     const cashierFromLocalStorage = cachedUsers.find(user => 
       user.phone_number === phoneNumber && user.role === 'cashier'
     );
-    
     if (cashierFromLocalStorage) {
       console.log('Cashier found in localStorage');
       return cashierFromLocalStorage;
     }
-    
     const db = await getConnection();
     const tx = db.transaction('users', 'readonly');
     const store = tx.objectStore('users');
     const index = store.index('phone_number');
-    
     const user = await index.get(phoneNumber);
     if (user && user.role === 'cashier') {
       console.log('Cashier found in IndexedDB:', user);
       return user;
     }
-    
     return null;
   } catch (error) {
     console.error('Error getting cashier by phone:', error);
@@ -885,18 +839,15 @@ export const getCashierByPhone = async (phoneNumber) => {
 export const getUserByPhone = async (phone) => {
   try {
     console.log('Getting user by phone:', phone);
-    
     const cachedUsers = JSON.parse(localStorage.getItem(USERS_DATA_KEY) || '[]');
     const userFromLocalStorage = cachedUsers.find(user => user.phone_number === phone);
     if (userFromLocalStorage) {
       console.log('User found in localStorage');
       return userFromLocalStorage;
     }
-
     const db = await getConnection();
     const tx = db.transaction('users', 'readonly');
     const store = tx.objectStore('users');
-    
     try {
       const index = store.index('phone_number');
       const user = await index.get(phone);
@@ -920,13 +871,10 @@ export const checkUserExists = async (phoneNumber) => {
   try {
     const db = await getConnection();
     const users = await db.getAll('users');
-    
     const existsInIndexedDB = users.some(user => 
       user.phone_number === phoneNumber && user.role === 'cashier'
     );
-    
     if (existsInIndexedDB) return true;
-    
     const cachedUsers = JSON.parse(localStorage.getItem(USERS_DATA_KEY) || '[]');
     return cachedUsers.some(user => 
       user.phone_number === phoneNumber && user.role === 'cashier'

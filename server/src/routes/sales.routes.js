@@ -8,26 +8,39 @@ const router = express.Router();
 router.get('/daily', authenticateToken, checkRole(['admin', 'cashier']), async (req, res) => {
   try {
     const db = getDatabase();
-    const { date, waiter_id } = req.query;
+    const { date, waiter } = req.query;
     
-    console.log('Fetching daily sales with params:', { date, waiter_id });
+    console.log('Fetching daily sales with params:', { date, waiter });
     
-    // Get total sales and completed orders, adjusting for EAT (+3 hours)
+    // Build query parameters
+    const params = [];
+    let dateCondition = 'DATE(o.created_at, "localtime") = DATE("now", "localtime")';
+    let waiterCondition = '';
+    
+    if (date) {
+      dateCondition = 'DATE(o.created_at, "localtime") = DATE(?)';
+      params.push(date);
+    }
+    
+    if (waiter && waiter !== 'all') {
+      waiterCondition = 'AND o.waiter_id = ?';
+      params.push(waiter);
+    }
+    
+    // Get total sales and completed orders
     const salesSummary = await new Promise((resolve, reject) => {
-      const dateCondition = date === 'all' ? '' : 'AND DATE(datetime(created_at, \'+3 hours\')) = DATE(?)';
-      const params = date === 'all' ? [] : [date];
-      
       db.get(`
         SELECT 
           COUNT(*) as completedOrders,
-          SUM(total_amount) as totalSales
-        FROM orders
+          COALESCE(SUM(total_amount), 0) as totalSales
+        FROM orders o
         WHERE status IN ('completed', 'paid')
-        ${dateCondition}
+        AND ${dateCondition}
+        ${waiterCondition}
       `, params, (err, row) => {
         if (err) reject(err);
         else {
-          console.log('Sales summary:', row); // Add logging
+          console.log('Sales summary:', row);
           resolve(row || { completedOrders: 0, totalSales: 0 });
         }
       });
@@ -35,30 +48,24 @@ router.get('/daily', authenticateToken, checkRole(['admin', 'cashier']), async (
 
     // Get waiter statistics
     const waiterStats = await new Promise((resolve, reject) => {
-      const dateCondition = date === 'all' ? '' : 'AND DATE(datetime(o.created_at, \'+3 hours\')) = DATE(?)';
-      const waiterCondition = waiter_id && waiter_id !== 'all' ? 'AND u.id = ?' : '';
-      const params = [
-        ...(date === 'all' ? [] : [date]),
-        ...(waiter_id && waiter_id !== 'all' ? [waiter_id] : [])
-      ];
-      
       db.all(`
         SELECT 
           u.id as waiter_id,
           u.username as waiter_name,
-          COUNT(o.id) as order_count,
-          SUM(o.total_amount) as total_sales
+          COUNT(CASE WHEN o.status IN ('completed', 'paid') THEN o.id END) as order_count,
+          COALESCE(SUM(CASE WHEN o.status IN ('completed', 'paid') THEN o.total_amount ELSE 0 END), 0) as total_sales
         FROM users u
-        LEFT JOIN orders o ON u.id = o.waiter_id
+        LEFT JOIN orders o ON u.id = o.waiter_id AND ${dateCondition}
         WHERE u.role = 'waiter'
-        AND (o.status IN ('completed', 'paid') OR o.status IS NULL)
-        ${dateCondition}
         ${waiterCondition}
-        GROUP BY u.id
+        GROUP BY u.id, u.username
+        ORDER BY total_sales DESC
       `, params, (err, rows) => {
-        if (err) reject(err);
-        else {
-          console.log('Waiter stats:', rows); // Add logging
+        if (err) {
+          console.error('Error in waiter stats query:', err);
+          reject(err);
+        } else {
+          console.log('Waiter stats:', rows);
           resolve(rows || []);
         }
       });
@@ -70,12 +77,13 @@ router.get('/daily', authenticateToken, checkRole(['admin', 'cashier']), async (
       waiterStats: waiterStats.map(stat => ({
         ...stat,
         total_sales: parseFloat(stat.total_sales) || 0,
-        order_count: parseInt(stat.order_count) || 0
+        order_count: parseInt(stat.order_count) || 0,
+        average_order: stat.order_count > 0 ? stat.total_sales / stat.order_count : 0
       }))
     });
   } catch (error) {
     console.error('Error fetching daily sales:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
 

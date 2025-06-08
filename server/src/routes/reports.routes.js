@@ -130,50 +130,34 @@ router.get('/sales/daily', authenticateToken, checkRole(['admin']), async (req, 
     const db = getDatabase();
     const { timeRange, waiterId, date } = req.query;
     
-    console.log('Fetching sales report with params:', { timeRange, waiterId, date });
-    
+    // Build date condition based on timeRange
     let dateCondition = '';
     let params = [];
     
-    // Calculate date range based on timeRange
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
     switch (timeRange) {
-      case 'daily':
-        dateCondition = 'AND DATE(datetime(o.created_at, \'+3 hours\')) = DATE(?)';
-        params.push(today.toISOString().split('T')[0]);
+      case 'today':
+        dateCondition = 'DATE(created_at, "localtime") = DATE("now", "localtime")';
         break;
-      case 'weekly':
-        const weekAgo = new Date(today);
-        weekAgo.setDate(weekAgo.getDate() - 7);
-        dateCondition = 'AND DATE(datetime(o.created_at, \'+3 hours\')) >= DATE(?)';
-        params.push(weekAgo.toISOString().split('T')[0]);
+      case 'yesterday':
+        dateCondition = 'DATE(created_at, "localtime") = DATE("now", "localtime", "-1 day")';
         break;
-      case 'monthly':
-        const monthAgo = new Date(today);
-        monthAgo.setMonth(monthAgo.getMonth() - 1);
-        dateCondition = 'AND DATE(datetime(o.created_at, \'+3 hours\')) >= DATE(?)';
-        params.push(monthAgo.toISOString().split('T')[0]);
+      case 'week':
+        dateCondition = 'DATE(created_at, "localtime") >= DATE("now", "localtime", "-7 days")';
         break;
-      case 'yearly':
-        const yearAgo = new Date(today);
-        yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-        dateCondition = 'AND DATE(datetime(o.created_at, \'+3 hours\')) >= DATE(?)';
-        params.push(yearAgo.toISOString().split('T')[0]);
+      case 'month':
+        dateCondition = 'DATE(created_at, "localtime") >= DATE("now", "localtime", "-30 days")';
         break;
       case 'custom':
         if (date) {
-          dateCondition = 'AND DATE(datetime(o.created_at, \'+3 hours\')) = DATE(?)';
+          dateCondition = 'DATE(created_at, "localtime") = DATE(?)';
           params.push(date);
         }
         break;
       default:
-        // No date filter
-        break;
+        dateCondition = 'DATE(created_at, "localtime") = DATE("now", "localtime")';
     }
-    
-    // Add waiter filter if specified
+
+    // Add waiter condition if specified
     const waiterCondition = waiterId && waiterId !== 'all' ? 'AND o.waiter_id = ?' : '';
     if (waiterId && waiterId !== 'all') {
       params.push(waiterId);
@@ -184,10 +168,10 @@ router.get('/sales/daily', authenticateToken, checkRole(['admin']), async (req, 
       db.get(`
         SELECT 
           COUNT(*) as completedOrders,
-          SUM(total_amount) as totalSales
+          COALESCE(SUM(total_amount), 0) as totalSales
         FROM orders o
         WHERE status IN ('completed', 'paid')
-        ${dateCondition}
+        AND ${dateCondition}
         ${waiterCondition}
       `, params, (err, row) => {
         if (err) reject(err);
@@ -204,14 +188,14 @@ router.get('/sales/daily', authenticateToken, checkRole(['admin']), async (req, 
         SELECT 
           u.id as waiter_id,
           u.username as waiter_name,
-          COUNT(o.id) as order_count,
-          SUM(o.total_amount) as total_sales
+          COUNT(CASE WHEN o.status IN ('completed', 'paid') THEN o.id END) as order_count,
+          COALESCE(SUM(CASE WHEN o.status IN ('completed', 'paid') THEN o.total_amount ELSE 0 END), 0) as total_sales
         FROM users u
-        LEFT JOIN orders o ON u.id = o.waiter_id AND o.status IN ('completed', 'paid')
-        ${dateCondition ? 'AND ' + dateCondition.substring(4) : ''}
+        LEFT JOIN orders o ON u.id = o.waiter_id AND ${dateCondition}
         WHERE u.role = 'waiter'
         ${waiterCondition}
-        GROUP BY u.id
+        GROUP BY u.id, u.username
+        ORDER BY total_sales DESC
       `, params, (err, rows) => {
         if (err) reject(err);
         else {
@@ -226,21 +210,24 @@ router.get('/sales/daily', authenticateToken, checkRole(['admin']), async (req, 
       db.all(`
         SELECT 
           i.name,
-          COUNT(oi.id) as order_count,
+          COUNT(DISTINCT o.id) as order_count,
           SUM(oi.quantity) as total_quantity,
-          SUM(oi.price * oi.quantity) as total_revenue
-        FROM order_items oi
-        JOIN items i ON oi.item_id = i.id
+          COALESCE(SUM(oi.price * oi.quantity), 0) as total_revenue
+        FROM items i
+        JOIN order_items oi ON i.id = oi.item_id
         JOIN orders o ON oi.order_id = o.id
         WHERE o.status IN ('completed', 'paid')
-        ${dateCondition}
+        AND ${dateCondition}
         ${waiterCondition}
-        GROUP BY i.id
+        GROUP BY i.id, i.name
         ORDER BY total_revenue DESC
         LIMIT 5
       `, params, (err, rows) => {
         if (err) reject(err);
-        else resolve(rows || []);
+        else {
+          console.log('Top items:', rows);
+          resolve(rows || []);
+        }
       });
     });
 
